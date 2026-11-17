@@ -36,11 +36,15 @@ Source language is detected automatically by default; the target language is exp
 
 ## Showcase · Chinese → English
 
-<!-- Add your uploaded video links or linked thumbnails to the cells below. -->
+### Original · Chinese
 
-| Original · Chinese | DubFlow · English |
-| :---: | :---: |
-| <!-- Original video --> | <!-- Dubbed video --> |
+<!-- In the GitHub editor, drag the Chinese source video onto the blank line below. Keep the generated attachment URL outside this comment, on its own line with blank lines around it. -->
+
+### DubFlow · English
+
+<!-- In the GitHub editor, drag the English dubbed video onto the blank line below. Keep the generated attachment URL outside this comment, on its own line with blank lines around it. -->
+
+### Dialogue comparison
 
 <!-- Optional: add a short dialogue excerpt from the same example. -->
 
