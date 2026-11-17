@@ -1,0 +1,64 @@
+{
+  "TalkNet-ASD": {
+    "repository": "https://github.com/TaoRuijie/TalkNet-ASD",
+    "revision": "6d6821479af485e251c4991487e40573b42181b4",
+    "license": [
+      "LICENSE.md"
+    ],
+    "included": [
+      "model/faceDetector"
+    ],
+    "patches": [
+      "patches/talknet-external-weights.patch"
+    ]
+  },
+  "loconet": {
+    "repository": "https://github.com/SJTUwxz/LoCoNet_ASD",
+    "revision": "68d90c83fde956d60245d0715bbd18e9e5fd3bae",
+    "weights_source": "https://github.com/plnguyen2908/UniTalk-ASD-code",
+    "checkpoint_drive_id": "10HvRqNO34QsJpZgQTMYZdIAW4A2kP5fw",
+    "license": [],
+    "license_note": "No repository-level LICENSE in this upstream snapshot; retain per-file notices and confirm upstream redistribution terms.",
+    "included": ["model inference encoders", "torchvggish network and mel features", "README.md"],
+    "modification_notes": "loconet/LOCAL_CHANGES.md"
+  },
+  "SAM-Audio": {
+    "repository": "https://github.com/facebookresearch/sam-audio",
+    "revision": "bb4c6999d2677c7402360e426afc01ddfad6dce0",
+    "license": [
+      "LICENSE"
+    ],
+    "included": [
+      "sam_audio",
+      "package metadata"
+    ],
+    "patches": []
+  },
+  "perception_models": {
+    "repository": "https://github.com/facebookresearch/perception_models",
+    "revision": "e72b6810b1133e1c879f2cc965d276eb73803f1f",
+    "license": [
+      "LICENSE.PE",
+      "LICENSE.PLM"
+    ],
+    "included": [
+      "core",
+      "package metadata"
+    ],
+    "patches": []
+  },
+  "dacvae": {
+    "repository": "https://github.com/facebookresearch/dacvae",
+    "revision": "414c20785fc3a28373073ea8ef7a1316eeeaca6e",
+    "license": [
+      "LICENSE"
+    ],
+    "included": [
+      "dacvae",
+      "package metadata"
+    ],
+    "patches": [
+      "patches/dacvae-license-path.patch"
+    ]
+  }
+}
