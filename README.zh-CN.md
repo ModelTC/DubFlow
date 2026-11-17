@@ -36,21 +36,32 @@
 
 ## 效果展示 · 中文 → 英文
 
-### 原视频 · 中文
+### 案例 01
 
-<!-- 在 GitHub 编辑器中，将中文原视频拖到本注释下方的空白行。生成的附件链接放在注释外，独占一行，前后各留一个空行。 -->
+<!-- 一行一个案例：左侧原视频，右侧 DubFlow 结果。替换视频时，在 GitHub 编辑器上传 MP4，再替换下方对应的链接。附件链接放在 HTML 注释外，独占一行，前后各留空行。可以直接复用英文 README 中的链接，无需重复上传。 -->
 
-### DubFlow · 英文
+<table>
+<thead>
+<tr>
+<th align="center" width="50%">原视频 · 中文</th>
+<th align="center" width="50%">DubFlow · 英文</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td width="50%" align="center" valign="top">
 
-<!-- 在 GitHub 编辑器中，将英文译制视频拖到本注释下方的空白行。生成的附件链接放在注释外，独占一行，前后各留一个空行。 -->
+https://github.com/user-attachments/assets/91f09bd9-34e0-483b-98ee-31c84bc67015
 
-### 台词对照
+</td>
+<td width="50%" align="center" valign="top">
 
-<!-- 可选：填入同一案例的一小段对白，展示翻译前后的内容。 -->
+https://github.com/user-attachments/assets/50e90d2b-9a37-4a46-86f2-0d0494793487
 
-| 原文 · 中文 | 译文 · English |
-| --- | --- |
-| <!-- 原文台词 --> | <!-- 英文译文 --> |
+</td>
+</tr>
+</tbody>
+</table>
 
 <a id="pipeline"></a>
 

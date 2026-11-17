@@ -36,21 +36,32 @@ Source language is detected automatically by default; the target language is exp
 
 ## Showcase · Chinese → English
 
-### Original · Chinese
+### Case 01
 
-<!-- In the GitHub editor, drag the Chinese source video onto the blank line below. Keep the generated attachment URL outside this comment, on its own line with blank lines around it. -->
+<!-- One case per row: original on the left, DubFlow on the right. To change a video, upload its MP4 in the GitHub editor and replace the corresponding URL below. Keep each attachment URL on its own line, with blank lines around it and outside HTML comments. The same URLs can be reused in README.zh-CN.md. -->
 
-### DubFlow · English
+<table>
+<thead>
+<tr>
+<th align="center" width="50%">Original · Chinese</th>
+<th align="center" width="50%">DubFlow · English</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td width="50%" align="center" valign="top">
 
-<!-- In the GitHub editor, drag the English dubbed video onto the blank line below. Keep the generated attachment URL outside this comment, on its own line with blank lines around it. -->
+https://github.com/user-attachments/assets/91f09bd9-34e0-483b-98ee-31c84bc67015
 
-### Dialogue comparison
+</td>
+<td width="50%" align="center" valign="top">
 
-<!-- Optional: add a short dialogue excerpt from the same example. -->
+https://github.com/user-attachments/assets/50e90d2b-9a37-4a46-86f2-0d0494793487
 
-| Original dialogue · 中文 | Translated dialogue · English |
-| --- | --- |
-| <!-- Chinese dialogue --> | <!-- English dialogue --> |
+</td>
+</tr>
+</tbody>
+</table>
 
 <a id="pipeline"></a>
 
