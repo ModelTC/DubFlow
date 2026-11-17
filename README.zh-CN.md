@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/dubflow-logo.png" width="440" alt="DubFlow 标志" />
+  <img src="docs/assets/lightdubber-logo.png" width="440" alt="LightDubber 标志" />
 </p>
 
 <h3 align="center">理解谁在说话，让视频跨越语言</h3>
@@ -25,7 +25,7 @@
 
 ---
 
-**DubFlow** 是面向**多人对话与多语言创作**的强大视频译制框架。融合说话人感知的音色克隆、局部口型同步与自适应时长，让跨语言表达兼顾人物身份、原片风格和对白节奏。从单人口播到多人互动，上传视频，即可让你的故事跨越语言边界。
+**LightDubber** 是面向**多人对话与多语言创作**的强大视频译制框架。融合说话人感知的音色克隆、局部口型同步与自适应时长，让跨语言表达兼顾人物身份、原片风格和对白节奏。从单人口播到多人互动，上传视频，即可让你的故事跨越语言边界。
 
 <a id="languages"></a>
 
@@ -38,13 +38,13 @@
 
 ### 案例 01
 
-<!-- 一行一个案例：左侧原视频，右侧 DubFlow 结果。替换视频时，在 GitHub 编辑器上传 MP4，再替换下方对应的链接。附件链接放在 HTML 注释外，独占一行，前后各留空行。可以直接复用英文 README 中的链接，无需重复上传。 -->
+<!-- 一行一个案例：左侧原视频，右侧 LightDubber 结果。替换视频时，在 GitHub 编辑器上传 MP4，再替换下方对应的链接。附件链接放在 HTML 注释外，独占一行，前后各留空行。可以直接复用英文 README 中的链接，无需重复上传。 -->
 
 <table>
 <thead>
 <tr>
 <th align="center" width="50%">原视频 · 中文</th>
-<th align="center" width="50%">DubFlow · 英文</th>
+<th align="center" width="50%">LightDubber · 英文</th>
 </tr>
 </thead>
 <tbody>
@@ -68,10 +68,10 @@ https://github.com/user-attachments/assets/ffc9e8b9-be30-41cf-aec9-19c4e5c4f54e
 ## 处理流程
 
 <p align="center">
-  <img src="docs/assets/dubflow-pipeline.png" width="1100" alt="DubFlow 流程：理解对白和说话人、分离音轨、翻译配音、编辑口型、回贴混音并输出。vLLM 和 LightX2V 作为独立模型服务。" />
+  <img src="docs/assets/lightdubber-pipeline.png" width="1100" alt="LightDubber 流程：理解对白和说话人、分离音轨、翻译配音、编辑口型、回贴混音并输出。LightLLM 和 LightX2V 作为独立模型服务。" />
 </p>
 
-**ASR 与时间对齐**提供原文和时间信息，音视频联合的**说话人绑定**将台词关联到画面人物。**音源分离**拆分对白与背景；由 **vLLM** 提供服务的 **LLM** 完成翻译，**TTS** 生成目标语言配音，**LightX2V** 承载口型同步模型，局部编辑人物嘴部。最后回贴画面、混合译音与背景声并输出。这里描述模块职责，不绑定具体模型；当前使用的实现见下方安装部署说明。
+**ASR 与时间对齐**提供原文和时间信息，音视频联合的**说话人绑定**将台词关联到画面人物。**音源分离**拆分对白与背景；由 **LightLLM** 提供服务的 **LLM** 完成翻译，**TTS** 生成目标语言配音，**LightX2V** 承载口型同步模型，局部编辑人物嘴部。最后回贴画面、混合译音与背景声并输出。这里描述模块职责，不绑定具体模型；当前使用的实现见下方安装部署说明。
 
 > 识别、翻译、分离与口型均受模型能力影响，不保证逐字准确、背景完全干净或完美同步。没有可绑定的可见人物时，仅替换音频，不强行修改其他人的嘴；模型执行异常则报告失败。
 
@@ -80,11 +80,11 @@ https://github.com/user-attachments/assets/ffc9e8b9-be30-41cf-aec9-19c4e5c4f54e
 
 ### 1. 准备环境
 
-需要 Linux、CUDA GPU、FFmpeg、`curl`、`unzip` 和 `uv`。以下命令均在仓库根目录运行：
+需要 Linux、CUDA GPU、FFmpeg、`curl`、`unzip` 和 `uv`。当前 GitHub 仓库地址仍使用旧名称 `DubFlow`；以下命令将本地目录命名为 `LightDubber`，后续命令均在该目录运行：
 
 ~~~bash
-git clone https://github.com/ModelTC/DubFlow.git
-cd DubFlow
+git clone https://github.com/ModelTC/DubFlow.git LightDubber
+cd LightDubber
 
 # 主管线：识别、分离、人物绑定和网页
 bash scripts/install_unified.sh "$PWD/.venv"
@@ -97,12 +97,26 @@ uv pip install --python .venv-tts/bin/python \
 uv pip install --python .venv-tts/bin/python \
   qwen-tts==0.1.1 transformers==4.57.3 accelerate==1.12.0 soundfile
 
-# 翻译服务
+# 翻译服务：默认使用 LightLLM
+git clone https://github.com/ModelTC/LightLLM.git ../LightLLM
+uv venv --python 3.10 --seed .venv-lightllm
+uv pip install --python .venv-lightllm/bin/python \
+  -r ../LightLLM/requirements.txt \
+  --extra-index-url https://download.pytorch.org/whl/cu124
+LIGHTDUBBER_ROOT="$PWD"
+(cd ../LightLLM && "$LIGHTDUBBER_ROOT/.venv-lightllm/bin/python" setup.py install)
+~~~
+
+另在独立环境中，按仓库说明安装**已支持原生 TBDub 推理的 [LightX2V](https://github.com/ModelTC/LightX2V)**。该环境还需安装 `scikit-image`，用于色彩校正。
+
+如需使用可选的 vLLM 后端，另建环境：
+
+~~~bash
 uv venv --python 3.11 .venv-vllm
 uv pip install --python .venv-vllm/bin/python vllm==0.23.0
 ~~~
 
-另在独立环境中，按仓库说明安装**已支持原生 TBDub 推理的 [LightX2V](https://github.com/ModelTC/LightX2V)**。该环境还需安装 `scikit-image`，用于色彩校正。
+使用 vLLM 时，在 `config.local.json` 中将 `translation_backend` 设为 `vllm`，启动终端 1 时设置 `VLLM_BIN="$PWD/.venv-vllm/bin/vllm"`。[LightLLM 安装文档](https://lightllm-en.readthedocs.io/en/latest/getting_started/installation.html) 列出了 GPU 和共享内存要求。
 
 这些环境因依赖约束而分开，不要混装。主环境安装脚本会建立 FFmpeg 动态库链接；管线启动各阶段时自动设置库搜索路径。
 
@@ -151,17 +165,17 @@ PYTHON_BIN="$PWD/.venv/bin/python" bash scripts/download_models.sh sam-audio
 
 | 显卡 | 进程 | 职责 |
 | :-- | :-- | :-- |
-| 0 | vLLM | Qwen3.5-9B 翻译 |
+| 0 | LightLLM | Qwen3.5-9B 翻译 |
 | 1 | LightX2V | TBDub Student 口型编辑 |
-| 2、3 | DubFlow worker | 每个 worker 处理一个视频；TTS 在同卡独立常驻进程中运行 |
+| 2、3 | LightDubber worker | 每个 worker 处理一个视频；TTS 在同卡独立常驻进程中运行 |
 
-各命令在不同终端、DubFlow 根目录执行。每个终端都要将 `MODEL_DIR` 设置为实际模型目录，并替换 LightX2V 的安装路径。
+各命令在不同终端、LightDubber 根目录执行。每个终端都要将 `MODEL_DIR` 设置为实际模型目录，并替换 LightX2V 的安装路径。
 
 **终端 1 — 翻译服务**
 
 ~~~bash
 GPU_ID=0 MODEL_PATH="$MODEL_DIR/Qwen3.5-9B" \
-  VLLM_BIN="$PWD/.venv-vllm/bin/vllm" \
+  LIGHTLLM_PYTHON="$PWD/.venv-lightllm/bin/python" \
   bash scripts/serve_translation.sh
 ~~~
 
@@ -175,9 +189,9 @@ GPU_ID=1 LIGHTX2V_PATH=/path/to/LightX2V \
   bash scripts/serve_lipsync.sh
 ~~~
 
-默认接口分别为 `http://127.0.0.1:18440/v1` 和 `http://127.0.0.1:18441`，对应配置中的 `translation_url`、`tbdub_url`。
+`config.local.json` 中的 `translation_backend` 默认是 `lightllm`，服务脚本也读取该字段。切换到 vLLM 时修改此配置，让服务、管线和网页标注保持一致。`TRANSLATION_BACKEND` 环境变量只覆盖服务进程，可用于单独测试。默认接口分别为 `http://127.0.0.1:18440/v1` 和 `http://127.0.0.1:18441`，对应配置中的 `translation_url`、`tbdub_url`。
 
-**LightX2V 和 DubFlow 必须能够访问相同的媒体绝对路径**，容器部署时也一样。两个模型接口应保持内网可用，不要直接暴露公网。显存需求取决于模型和输入，上面的显卡分配仅为部署示例，不代表最低显存承诺。
+**LightX2V 和 LightDubber 必须能够访问相同的媒体绝对路径**，容器部署时也一样。两个模型接口应保持内网可用，不要直接暴露公网。显存需求取决于模型和输入，上面的显卡分配仅为部署示例，不代表最低显存承诺。
 
 <a id="usage"></a>
 ## 开始翻译
@@ -202,9 +216,9 @@ DUB_GPUS=2,3 DUB_CONFIG="$PWD/config.local.json" \
 CLOUDFLARED_BIN=/path/to/cloudflared PORT=18320 bash scripts/public.sh
 ~~~
 
-使用终端打印的 HTTPS 地址。拿到链接的人可以上传并触发推理，仅分享给允许使用的用户；停止隧道进程后取消访问。不要公开 vLLM 或 LightX2V 模型接口。
+使用终端打印的 HTTPS 地址。拿到链接的人可以上传并触发推理，仅分享给允许使用的用户；停止隧道进程后取消访问。不要公开翻译服务或 LightX2V 模型接口。
 
-默认单文件上限为 250 MB，分块为 32 MiB。启动网页时可通过 `DUB_MAX_UPLOAD_MB`、`DUB_UPLOAD_CHUNK_MB` 调整。
+默认单文件上限为 1 GB，每次请求发送 8 MiB；服务器每收到 2 MiB 就保存并确认进度，连接中断后可从已保存的位置继续。同时最多接收 16 个上传，与视频 worker 数量独立。启动网页时可通过 `DUB_MAX_UPLOAD_MB`、`DUB_UPLOAD_CHUNK_MB`、`DUB_MAX_CONCURRENT_UPLOADS` 调整。
 
 </details>
 
@@ -260,6 +274,6 @@ CLI 与网页 worker 共用 `main.py`。可通过 `python -m stages.<module> --h
 
 ---
 
-基于 [LightX2V](https://github.com/ModelTC/LightX2V)、[vLLM](https://github.com/vllm-project/vllm) 及 [third_party/SOURCES.json](third_party/SOURCES.json) 记录的上游模型与组件构建。原始许可及必要署名保留在 [third_party/](third_party/) 和 [licenses/](licenses/)。模型与素材的使用权限需分别遵守；声音克隆须获得相应授权。
+基于 [LightX2V](https://github.com/ModelTC/LightX2V)、[LightLLM](https://github.com/ModelTC/LightLLM)（或可选的 [vLLM](https://github.com/vllm-project/vllm)）及 [third_party/SOURCES.json](third_party/SOURCES.json) 记录的上游模型与组件构建。原始许可及必要署名保留在 [third_party/](third_party/) 和 [licenses/](licenses/)。模型与素材的使用权限需分别遵守；声音克隆须获得相应授权。
 
 <p align="center"><a href="#pipeline">回到流程图 ↑</a> · <a href="README.md">English</a></p>

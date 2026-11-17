@@ -105,32 +105,18 @@ button[hidden],
   border-left: 1px solid #ccd5cc;
   padding-left: 12px;
 }
+.brand-wordmark {
+  background: linear-gradient(105deg, #287653, #3f9d79 52%, #76c4a1);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
 .brand-mark {
+  display: block;
   width: 35px;
   height: 35px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  background: var(--ink);
-  transform: rotate(-3deg);
-}
-.brand-mark i {
-  display: block;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--mint);
-  height: 9px;
-}
-.brand-mark i:nth-child(2) {
-  height: 22px;
-}
-.brand-mark i:nth-child(3) {
-  height: 16px;
-}
-.brand-mark i:nth-child(4) {
-  height: 11px;
+  flex-shrink: 0;
+  object-fit: contain;
 }
 nav {
   display: flex;
@@ -1429,7 +1415,7 @@ footer {
   letter-spacing: 1px;
   color: #758969;
 }
-.footer-brand span {
+.footer-brand .brand-separator {
   padding: 0 8px;
   color: #b4bfa9;
 }
@@ -1620,10 +1606,11 @@ dialog::backdrop {
   }
   .header-inner {
     padding: 0 22px;
-    gap: 20px;
+    gap: 12px;
   }
   .brand {
-    font-size: 21px;
+    font-size: 18px;
+    letter-spacing: 0.5px;
     gap: 9px;
   }
   .brand-mark {

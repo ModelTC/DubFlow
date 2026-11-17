@@ -30,7 +30,7 @@
   "merge_speaker_turns": true,
   "speaker_turn_max_gap_seconds": 0.8,
   "speaker_turn_max_seconds": 15,
-  "translation_backend": "vllm",
+  "translation_backend": "lightllm",
   "translation_url": "http://127.0.0.1:18440/v1",
   "tbdub_url": "http://127.0.0.1:18441",
   "landmarker_model": "models/tbdub/face_landmarker.task",

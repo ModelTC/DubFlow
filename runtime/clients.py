@@ -15,7 +15,7 @@ class Translator:
         response = self.session.get(f"{self.url}/models", timeout=(5, 10))
         response.raise_for_status()
         if self.model not in {item["id"] for item in response.json()["data"]}:
-            raise RuntimeError(f"vLLM does not serve {self.model}")
+            raise RuntimeError(f"Translation service does not serve {self.model}")
 
     def __call__(self, prompt):
         response = self.session.post(f"{self.url}/chat/completions", json={

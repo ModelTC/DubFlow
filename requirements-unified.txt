@@ -55,4 +55,4 @@ ipython
 importlib-resources
 
 # Local inference-only source packages and SceneDetect use --no-deps.
-# Qwen3-TTS runs separately with Transformers 4.57; vLLM and LightX2V have their own environments.
+# Qwen3-TTS runs separately with Transformers 4.57; the translation service and LightX2V have their own environments.

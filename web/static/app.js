@@ -32,7 +32,7 @@ function renderProfile() {
     item.append(stage, model.name);
     return item;
   }));
-  $("profileHint").textContent = profile && !profile.available ? profile.reason : "Qwen 识别并对齐完整音频；SAM-Audio Large-TV 分离对白与背景；vLLM 翻译，Qwen TTS 配音，LightX2V TBDub Student 编辑口型。没有可绑定的嘴部时只替换译音，模型执行异常则报错，不将失败当作成功。不做反复内容核验；识别可能漏句，背景可能残留原对白。";
+  $("profileHint").textContent = profile && !profile.available ? profile.reason : "Qwen 识别并对齐完整音频；SAM-Audio Large-TV 分离对白与背景；翻译服务生成译文，Qwen TTS 配音，LightX2V TBDub Student 编辑口型。没有可绑定的嘴部时只替换译音，模型执行异常则报错，不将失败当作成功。不做反复内容核验；识别可能漏句，背景可能残留原对白。";
   $("profileHint").classList.toggle("unavailable", Boolean(profile && !profile.available));
 }
 
@@ -59,16 +59,27 @@ function toast(message, kind = "info") {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    ...options,
-    headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.method ? { "X-CSRF-Token": state.csrf } : {}), ...options.headers },
-  });
-  let result;
-  try { result = await response.json(); }
-  catch { throw Object.assign(new Error(`服务入口返回非 JSON 响应（HTTP ${response.status}），请稍后重试。`), { status: response.status, retryable: true }); }
-  if (!response.ok) throw Object.assign(new Error(typeof result.detail === "string" ? result.detail : `请求未完成（HTTP ${response.status}），请稍后重试。`), { status: response.status });
-  return result;
+  const { timeoutMs = 0, ...requestOptions } = options;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetch(path, {
+      credentials: "same-origin",
+      ...requestOptions,
+      ...(controller ? { signal: controller.signal } : {}),
+      headers: { ...(requestOptions.body ? { "Content-Type": "application/json" } : {}), ...(requestOptions.method ? { "X-CSRF-Token": state.csrf } : {}), ...requestOptions.headers },
+    });
+    let result;
+    try { result = await response.json(); }
+    catch { throw Object.assign(new Error(`服务入口返回非 JSON 响应（HTTP ${response.status}），请稍后重试。`), { status: response.status, retryable: true }); }
+    if (!response.ok) throw Object.assign(new Error(typeof result.detail === "string" ? result.detail : `请求未完成（HTTP ${response.status}），请稍后重试。`), { status: response.status });
+    return result;
+  } catch (error) {
+    if (error.name === "AbortError") throw Object.assign(new Error("请求超时，请检查网络后重试。"), { retryable: true });
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function formatBytes(bytes) {
@@ -151,32 +162,72 @@ function discardUpload() {
   if (uploadId) api(`/api/uploads/${uploadId}`, { method: "DELETE" }).catch(() => {});
 }
 
+function renderUploadProgress(confirmed, sent = null, chunkSize = 0) {
+  const bytes = Math.min(confirmed, state.file.size);
+  const percent = Math.round(100 * bytes / state.file.size);
+  $("uploadProgressBar").value = percent;
+  const progress = `服务器已确认 ${percent}% · ${formatBytes(bytes)} / ${formatBytes(state.file.size)}`;
+  $("uploadProgressLabel").textContent = sent === null ? progress : sent >= chunkSize
+    ? `${progress} · 当前分块已发送到隧道，等待服务器确认…`
+    : `${progress} · 当前分块已发送 ${formatBytes(sent)} / ${formatBytes(chunkSize)} 到隧道`;
+}
+
 function sendChunk(uploadId, offset, chunk) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let idleTimer;
+    let stalled = false;
+    const clearIdleTimer = () => clearTimeout(idleTimer);
+    const resetIdleTimer = () => {
+      clearIdleTimer();
+      idleTimer = setTimeout(() => {
+        stalled = true;
+        xhr.abort();
+        reject(Object.assign(new Error("上传通道 45 秒无进展，正在检查已接收的分块。"), { retryable: true }));
+      }, 45000);
+    };
     state.uploadXhr = xhr;
     xhr.open("PUT", `/api/uploads/${uploadId}`);
     xhr.setRequestHeader("X-CSRF-Token", state.csrf);
     xhr.setRequestHeader("Upload-Offset", String(offset));
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
-    xhr.timeout = 600000;
+    xhr.timeout = 120000;
     xhr.upload.onprogress = (event) => {
-      const uploaded = offset + event.loaded;
-      const percent = Math.min(100, Math.round(100 * uploaded / state.file.size));
-      $("uploadProgressBar").value = percent;
-      $("uploadProgressLabel").textContent = `正在上传 ${percent}% · ${formatBytes(uploaded)} / ${formatBytes(state.file.size)}`;
+      renderUploadProgress(offset, event.loaded, chunk.size);
+      resetIdleTimer();
+    };
+    xhr.upload.onload = () => {
+      renderUploadProgress(offset, chunk.size, chunk.size);
+      resetIdleTimer();
     };
     xhr.onload = () => {
+      clearIdleTimer();
       let data;
       const retryable = [408, 409, 429, 499].includes(xhr.status) || xhr.status >= 500;
       try { data = JSON.parse(xhr.responseText); }
       catch { return reject(Object.assign(new Error(`上传入口返回非 JSON 响应（HTTP ${xhr.status}），已提交分块仍保留。`), { retryable: retryable || xhr.status === 404, status: xhr.status })); }
-      if (xhr.status >= 200 && xhr.status < 300 && data.offset === offset + chunk.size) resolve(data.offset);
-      else reject(Object.assign(new Error(typeof data.detail === "string" ? data.detail : `上传响应异常（HTTP ${xhr.status}），请重试。`), { retryable, status: xhr.status }));
+      if ((xhr.status >= 200 && xhr.status < 300 && data.offset === offset + chunk.size) ||
+          (xhr.status === 499 && data.offset > offset && data.offset <= offset + chunk.size)) {
+        renderUploadProgress(data.offset);
+        resolve(data.offset);
+      } else {
+        reject(Object.assign(new Error(typeof data.detail === "string" ? data.detail : `上传响应异常（HTTP ${xhr.status}），请重试。`), { retryable, status: xhr.status }));
+      }
     };
-    xhr.onerror = () => reject(Object.assign(new Error("上传连接中断，请检查网络后重新提交。"), { retryable: true }));
-    xhr.ontimeout = () => reject(Object.assign(new Error("上传超过 10 分钟，已提交分块保留，请检查网络后继续。"), { retryable: true }));
-    xhr.onabort = () => reject(new Error("上传已取消。"));
+    xhr.onerror = () => {
+      clearIdleTimer();
+      reject(Object.assign(new Error("上传连接中断，正在检查已接收的分块。"), { retryable: true }));
+    };
+    xhr.ontimeout = () => {
+      clearIdleTimer();
+      reject(Object.assign(new Error("分块上传超过 2 分钟，正在检查已接收的分块。"), { retryable: true }));
+    };
+    xhr.onabort = () => {
+      clearIdleTimer();
+      reject(stalled ? Object.assign(new Error("上传通道 45 秒无进展。"), { retryable: true }) : new Error("上传已取消。"));
+    };
+    renderUploadProgress(offset, 0, chunk.size);
+    resetIdleTimer();
     xhr.send(chunk);
   });
 }
@@ -188,9 +239,21 @@ async function uploadChunk(uploadId, offset, chunk) {
     catch (error) {
       if (state.canceledUpload || !error.retryable) throw error;
       // A lost response is not proof the chunk was lost. Check before resending.
-      const remote = await api(`/api/uploads/${uploadId}`);
-      if (remote.offset === offset + chunk.size) return remote.offset;
-      if (remote.status !== "uploading" || remote.offset !== offset) throw new Error("上传状态发生变化，请刷新后查看任务记录。");
+      let remote;
+      try { remote = await api(`/api/uploads/${uploadId}`, { timeoutMs: 15000 }); }
+      catch (probeError) {
+        if (attempt === 2 || probeError.status && probeError.status < 500 && !probeError.retryable) throw probeError;
+        $("uploadProgressLabel").textContent = `连接暂时中断，正在重试当前分块（${attempt + 1}/2）…`;
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        continue;
+      }
+      if (remote.status !== "uploading" || remote.offset < offset || remote.offset > offset + chunk.size) {
+        throw new Error("上传状态发生变化，请刷新后查看任务记录。");
+      }
+      if (remote.offset > offset) {
+        renderUploadProgress(remote.offset);
+        return remote.offset;
+      }
       if (attempt === 2) throw error;
       $("uploadProgressLabel").textContent = `连接中断，正在续传（重试 ${attempt + 1}/2）…`;
       await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
@@ -230,6 +293,7 @@ async function submit(event) {
     }
     state.uploadId = upload.upload_id;
     let offset = upload.offset;
+    renderUploadProgress(offset);
     while (offset < state.file.size) {
       if (state.canceledUpload) throw new Error("上传已取消。");
       const chunk = state.file.slice(offset, offset + upload.chunk_bytes);

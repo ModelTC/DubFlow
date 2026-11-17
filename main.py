@@ -71,7 +71,7 @@ def run(args, execute=None):
                                                  config.get("speaker_turn_max_seconds", 15.))
         config["speaker_turn_merge_policy"] = turn_merging
     config["asr_recognition_policy"] = ASR_POLICY
-    config["pipeline_recipe"] = "vllm_lightx2v_large_tv_loconet_v3"
+    config["pipeline_recipe"] = f"{config['translation_backend']}_lightx2v_large_tv_loconet_v3"
     config["content_verification"] = "disabled"
     config["separation_recipe"] = "sam_large_tv_asr_anchors"
     config["separation_validation"] = "disabled"

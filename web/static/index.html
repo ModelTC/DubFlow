@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#122326">
   <meta name="description" content="上传视频，选择语言，在保留原片和背景声的基础上生成翻译配音与口型。">
-  <title>声映 · 视频翻译工作台</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%23122326'/%3E%3Cpath d='M17 27v10m10-20v30m10-25v20m10-15v10' stroke='%23b4e9cf' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <title>LightDubber · 视频翻译工作台</title>
+  <link rel="icon" type="image/svg+xml" href="/static/lightdubber-icon.svg">
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
 </head>
@@ -27,9 +27,9 @@
 
   <header class="site-header">
     <div class="header-inner">
-      <a class="brand" href="#workspace" aria-label="声映视频翻译首页">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-        <span>声映 <small>DUB STUDIO</small></span>
+      <a class="brand" href="#workspace" aria-label="LightDubber 视频翻译首页">
+        <img class="brand-mark" src="/static/lightdubber-icon.svg" width="35" height="35" alt="">
+        <span><span class="brand-wordmark">LightDubber</span><small>DUB STUDIO</small></span>
       </a>
       <nav aria-label="主导航"><a href="#workspace" class="nav-current">翻译工作台</a><button type="button" class="nav-help" data-open-help>使用说明</button></nav>
       <span class="service-status" id="serviceStatus"><span class="status-dot"></span><span id="serviceText">连接服务中</span></span>
@@ -111,10 +111,10 @@
     <section class="how-it-works" aria-label="处理流程简介"><div class="how-label"><span class="eyebrow muted">BUILT FOR YOUR STORY</span><h2>换一种语言，<br>不换一个故事。</h2></div><div><span class="how-number">01 /</span><h3>理解原片</h3><p>自动识别对白时序与画面中的说话人。</p></div><div><span class="how-number">02 /</span><h3>重建表达</h3><p>翻译为目标语言，生成配音，再编辑可靠的人脸口型。</p></div><div><span class="how-number">03 /</span><h3>保留氛围</h3><p>对白之外尽量保留原片；不确定的片段自动回退。</p></div></section>
   </main>
 
-  <footer><a class="footer-brand" href="#workspace">声映 <span>/</span> DUB STUDIO</a><span>让好故事，不止一种声音。</span><button type="button" class="text-button" data-open-help>使用与隐私说明 <svg class="icon"><use href="#i-arrow"/></svg></button></footer>
+  <footer><a class="footer-brand" href="#workspace"><span class="brand-wordmark">LightDubber</span> <span class="brand-separator">/</span> DUB STUDIO</a><span>让好故事，不止一种声音。</span><button type="button" class="text-button" data-open-help>使用与隐私说明 <svg class="icon"><use href="#i-arrow"/></svg></button></footer>
   <div class="toast" id="toast" role="alert" hidden><span id="toastText"></span><button type="button" class="icon-button" id="dismissToast" aria-label="关闭提示"><svg class="icon"><use href="#i-close"/></svg></button></div>
 
-  <dialog id="helpDialog" aria-labelledby="helpTitle"><div class="dialog-heading"><div><span class="eyebrow muted">QUICK GUIDE</span><h2 id="helpTitle">开始前，了解这几件事</h2></div><button type="button" class="icon-button" id="closeHelp" aria-label="关闭使用说明"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="dialog-body"><h3>目前支持什么？</h3><p>原视频语言自动检测；请选目标语言。当前可选语种以工作台显示为准，视频需包含音轨。</p><h3>时长策略怎么选？</h3><p>关闭“视频时长自适应”时保持原片时长，译音超时先尝试缩译、再调速。开启后，适合独立处理的单镜头语句会按译音延长或缩短画面；插帧与取帧只作用于这些片段。处理更慢，局部运动和背景音节奏可能变化；切镜、多人交叠或快速运动仍可能出现伪影。</p><h3>如何处理多人和背景声？</h3><p>系统用 Qwen 识别对白、匹配说话人并生成配音；SAM-Audio Large-TV 分离对白与背景，复用 ASR 时间提示；翻译由 vLLM 服务完成，TBDub Student 由 LightX2V 服务完成，不做译文／成片反复核验。人脸不可靠的片段仅处理音频，仍可能漏句、配错台词或残留原语言对白。时间对齐不等于内容正确，请完整预览结果。</p><h3>为什么需要等待？</h3><p>视频 worker 按工作台显示的数量并发，翻译模型共享；超出后排队。模型在启动时预热并常驻。进度按处理阶段更新，不是精确剩余时间。</p><h3>谁能看我的素材？</h3><p>上传与结果保存在这台服务器，不会发送给额外的付费生图或视频 API。公网访问时，上传与下载会经当前入口的 Cloudflare 或 Gradio 隧道中转。没有登录密码；当前浏览器会话用于隔离任务，清除 Cookie 后可能无法找回记录。不要上传无权处理或不适合保存在该服务器的敏感素材。</p><h3>输出是什么？</h3><p>生成视频、可用的对比视频、原文、译文和处理报告。文本是识别与翻译记录，不是时间轴字幕文件。处理完成不代表台词已通过内容核验，请在发布前检查结果。</p></div><button type="button" class="button button-primary dialog-confirm" id="confirmHelp">知道了，开始翻译 <svg class="icon"><use href="#i-arrow"/></svg></button></dialog>
+  <dialog id="helpDialog" aria-labelledby="helpTitle"><div class="dialog-heading"><div><span class="eyebrow muted">QUICK GUIDE</span><h2 id="helpTitle">开始前，了解这几件事</h2></div><button type="button" class="icon-button" id="closeHelp" aria-label="关闭使用说明"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="dialog-body"><h3>目前支持什么？</h3><p>原视频语言自动检测；请选目标语言。当前可选语种以工作台显示为准，视频需包含音轨。</p><h3>时长策略怎么选？</h3><p>关闭“视频时长自适应”时保持原片时长，译音超时先尝试缩译、再调速。开启后，适合独立处理的单镜头语句会按译音延长或缩短画面；插帧与取帧只作用于这些片段。处理更慢，局部运动和背景音节奏可能变化；切镜、多人交叠或快速运动仍可能出现伪影。</p><h3>如何处理多人和背景声？</h3><p>系统用 Qwen 识别对白、匹配说话人并生成配音；SAM-Audio Large-TV 分离对白与背景，复用 ASR 时间提示；翻译由配置的服务后端完成，TBDub Student 由 LightX2V 服务完成，不做译文／成片反复核验。人脸不可靠的片段仅处理音频，仍可能漏句、配错台词或残留原语言对白。时间对齐不等于内容正确，请完整预览结果。</p><h3>为什么需要等待？</h3><p>视频 worker 按工作台显示的数量并发，翻译模型共享；超出后排队。模型在启动时预热并常驻。进度按处理阶段更新，不是精确剩余时间。</p><h3>谁能看我的素材？</h3><p>上传与结果保存在这台服务器，不会发送给额外的付费生图或视频 API。公网访问时，上传与下载会经当前入口的 Cloudflare 或 Gradio 隧道中转。没有登录密码；当前浏览器会话用于隔离任务，清除 Cookie 后可能无法找回记录。不要上传无权处理或不适合保存在该服务器的敏感素材。</p><h3>输出是什么？</h3><p>生成视频、可用的对比视频、原文、译文和处理报告。文本是识别与翻译记录，不是时间轴字幕文件。处理完成不代表台词已通过内容核验，请在发布前检查结果。</p></div><button type="button" class="button button-primary dialog-confirm" id="confirmHelp">知道了，开始翻译 <svg class="icon"><use href="#i-arrow"/></svg></button></dialog>
 
   <template id="jobRowTemplate"><button type="button" class="job-row"><span class="job-row-icon"><svg class="icon"><use href="#i-film"/></svg></span><span class="job-row-content"><strong></strong><span class="job-row-meta"></span></span><span class="job-row-state"></span></button></template>
 </body>

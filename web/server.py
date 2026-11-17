@@ -32,6 +32,7 @@ from starlette.requests import ClientDisconnect
 
 STATIC = Path(__file__).parent / "static"
 COOKIE = "dub_session"
+UPLOAD_COMMIT_BYTES = 2 * 1024**2
 LANGUAGES = [{"code": code, "label": LANGUAGE_LABELS[code]} for code in SUPPORTED_LANGUAGES]
 LANGUAGE_PATTERN = "^(" + "|".join(SUPPORTED_LANGUAGES) + ")$"
 
@@ -60,7 +61,7 @@ PROFILES = {
         {"stage": "说话人", "name": "Nemotron 3"},
         {"stage": "发言定位", "name": "UniTalk-LoCoNet"},
         {"stage": "对白分离", "name": "SAM-Audio Large-TV"},
-        {"stage": "翻译", "name": "Qwen3.5-9B · vLLM"},
+        {"stage": "翻译", "name": "Qwen3.5-9B · LightLLM"},
         {"stage": "配音", "name": "Qwen3-TTS 1.7B Base"},
         {"stage": "口型", "name": "TBDub"},
     ]},
@@ -73,19 +74,20 @@ class Settings:
     config: Path = field(default_factory=lambda: Path(os.environ.get("DUB_CONFIG", ROOT / "config.local.json")))
     gpus: tuple[int, ...] = field(default_factory=lambda: tuple(int(value) for value in os.environ.get("DUB_GPUS", "6,7").split(",")))
     python: str = field(default_factory=lambda: os.environ.get("DUB_PYTHON", sys.executable))
-    max_upload_bytes: int = field(default_factory=lambda: int(os.environ.get("DUB_MAX_UPLOAD_MB", "250")) * 1024**2)
+    max_upload_bytes: int = field(default_factory=lambda: int(os.environ.get("DUB_MAX_UPLOAD_MB", "1024")) * 1024**2)
     max_duration_seconds: float = field(default_factory=lambda: float(os.environ.get("DUB_MAX_DURATION_SECONDS", "0")))
     min_free_bytes: int = field(default_factory=lambda: int(os.environ.get("DUB_MIN_FREE_GB", "20")) * 1024**3)
     max_pending: int = field(default_factory=lambda: int(os.environ.get("DUB_MAX_PENDING", "8")))
     session_pending: int = field(default_factory=lambda: int(os.environ.get("DUB_SESSION_PENDING", "4")))
-    chunk_bytes: int = field(default_factory=lambda: int(os.environ.get("DUB_UPLOAD_CHUNK_MB", "32")) * 1024**2)
+    chunk_bytes: int = field(default_factory=lambda: int(os.environ.get("DUB_UPLOAD_CHUNK_MB", "8")) * 1024**2)
+    max_concurrent_uploads: int = field(default_factory=lambda: int(os.environ.get("DUB_MAX_CONCURRENT_UPLOADS", "16")))
     upload_ttl_seconds: int = 3600
 
     def __post_init__(self):
         self.data_dir = self.data_dir.resolve()
         self.config = self.config.resolve()
         if (not self.gpus or len(set(self.gpus)) != len(self.gpus) or min(self.gpus) < 0 or
-                min(self.max_upload_bytes, self.chunk_bytes, self.max_pending, self.session_pending) <= 0 or
+                min(self.max_upload_bytes, self.chunk_bytes, self.max_pending, self.session_pending, self.max_concurrent_uploads) <= 0 or
                 not math.isfinite(self.max_duration_seconds) or self.max_duration_seconds < 0):
             raise ValueError("GPU and queue/upload limits must be valid; duration limit must be nonnegative")
 
@@ -162,6 +164,21 @@ class Store:
     def upload_path(self, upload_id):
         return self.settings.data_dir / "uploads" / upload_id / "source"
 
+    def append_upload(self, upload_id, owner, offset, data):
+        with self.connection(write=True) as db:
+            row = self.upload(db, upload_id, owner)
+            if row["status"] != "uploading" or offset != row["offset"]:
+                raise HTTPException(409, "上传偏移或状态不匹配，请重新上传")
+            if offset + len(data) > row["size"]:
+                raise HTTPException(413, "上传内容超过申报文件大小")
+            with self.upload_path(upload_id).open("r+b") as handle:
+                handle.truncate(offset)
+                handle.seek(offset)
+                handle.write(data)
+            offset += len(data)
+            db.execute("UPDATE uploads SET offset=?,created_at=? WHERE id=?", (offset, time.time(), upload_id))
+        return offset
+
     def output(self, job_id):
         return self.settings.data_dir / "jobs" / job_id / "output"
 
@@ -218,7 +235,8 @@ def result_video_name(row, state):
 
 
 def translation_model_name(config):
-    return config["translation_model"] + " · vLLM"
+    backend = {"lightllm": "LightLLM", "vllm": "vLLM"}[config.get("translation_backend", "lightllm")]
+    return f"{config['translation_model']} · {backend}"
 
 
 def profile_catalog(settings):
@@ -476,7 +494,7 @@ def create_app(settings=None, start_worker=True):
     settings = settings or Settings()
     store = Store(settings)
     worker = Worker(store)
-    upload_slots = asyncio.Semaphore(len(settings.gpus))
+    upload_slots = asyncio.Semaphore(settings.max_concurrent_uploads)
     probe_slots = threading.BoundedSemaphore(len(settings.gpus))
 
     @asynccontextmanager
@@ -494,7 +512,7 @@ def create_app(settings=None, start_worker=True):
             if start_worker:
                 await asyncio.to_thread(worker.close)
 
-    app = FastAPI(title="Video Dubbing", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app = FastAPI(title="LightDubber", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store, app.state.worker = store, worker
 
     def session(request, mutate=False):
@@ -636,32 +654,28 @@ def create_app(settings=None, start_worker=True):
             if row["status"] != "uploading" or offset != row["offset"]:
                 raise HTTPException(409, "上传偏移或状态不匹配，请重新上传")
         async with upload_slots:
-            data = bytearray()
+            received = 0
+            pending = bytearray()
+            committed = offset
             try:
                 async for chunk in request.stream():
-                    if len(data) + len(chunk) > settings.chunk_bytes:
+                    received += len(chunk)
+                    if received > settings.chunk_bytes:
                         raise HTTPException(413, f"单个分块不能超过 {settings.chunk_bytes / 1024**2:g} MB")
-                    data.extend(chunk)
+                    pending.extend(chunk)
+                    while len(pending) >= UPLOAD_COMMIT_BYTES:
+                        free_space()
+                        committed = store.append_upload(upload_id, owner, committed, pending[:UPLOAD_COMMIT_BYTES])
+                        del pending[:UPLOAD_COMMIT_BYTES]
             except ClientDisconnect:
-                logging.warning("Upload disconnected: id=%s offset=%d received=%d bytes; offset unchanged",
-                                upload_id, offset, len(data))
-                return JSONResponse({"detail": "上传连接中断，已提交分块保留，可继续上传"}, status_code=499)
-        if not data:
-            raise HTTPException(422, "上传分块不能为空")
-        with store.connection(write=True) as db:
-            row = store.upload(db, upload_id, owner)
-            if row["status"] != "uploading" or offset != row["offset"]:
-                raise HTTPException(409, "上传偏移或状态不匹配，请重新上传")
-            if offset + len(data) > row["size"]:
-                raise HTTPException(413, "上传内容超过申报文件大小")
-            free_space()
-            with store.upload_path(upload_id).open("r+b") as handle:
-                handle.truncate(offset)
-                handle.seek(offset)
-                handle.write(data)
-            offset += len(data)
-            db.execute("UPDATE uploads SET offset=?,created_at=? WHERE id=?", (offset, time.time(), upload_id))
-        return {"offset": offset}
+                logging.warning("Upload disconnected: id=%s received=%d committed=%d", upload_id, received, committed)
+                return JSONResponse({"detail": "上传连接中断，已接收部分保留，可继续上传", "offset": committed}, status_code=499)
+            if not received:
+                raise HTTPException(422, "上传分块不能为空")
+            if pending:
+                free_space()
+                committed = store.append_upload(upload_id, owner, committed, pending)
+        return {"offset": committed}
 
     @app.get("/api/uploads/{upload_id}")
     def upload_status(upload_id: str, request: Request):
