@@ -51,12 +51,12 @@
 <tr>
 <td width="50%" align="center" valign="top">
 
-https://github.com/user-attachments/assets/91f09bd9-34e0-483b-98ee-31c84bc67015
+https://github.com/user-attachments/assets/83d17d3e-f1da-455e-b217-6ded433ff221
 
 </td>
 <td width="50%" align="center" valign="top">
 
-https://github.com/user-attachments/assets/50e90d2b-9a37-4a46-86f2-0d0494793487
+https://github.com/user-attachments/assets/ffc9e8b9-be30-41cf-aec9-19c4e5c4f54e
 
 </td>
 </tr>
