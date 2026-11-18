@@ -80,6 +80,17 @@
           "role": "module spacing and connectors",
           "source": "https://raw.githubusercontent.com/supabase/supabase/master/apps/docs/public/img/supabase-architecture.svg"
         }
+      ],
+      "labels_face_edit_prompt": "Use case: precise-object-edit.\nAsset type: exact localized correction to the existing LightDubber README workflow figure.\nImage 1 is the EDIT TARGET: the current pale-green SIX-stage LightDubber workflow.\nImage 2 is a REFERENCE ONLY: the original FIVE-stage README figure, used only as the source for its face illustration.\n\nMake ONLY these edits to image 1:\n1. In the bottom \"LLM backend\" panel, preserve the heading and divider, and replace its body with exactly TWO centered lines:\n\"LightLLM\"\n\"LLM API\"\nDelete \" / vLLM\" and all provider-specific names from this panel.\n\n2. In the bottom \"TTS backend\" panel, preserve the heading and divider. The body must have exactly TWO centered lines:\n\"Qwen3-TTS\"\n\"TTS API\"\nKeep these spellings and capitalization.\n\n3. In the bottom \"Lip-sync backend\" panel, preserve the heading and divider, and make its body exactly ONE centered line:\n\"LightX2V\"\nRemove the word \"TBDub\" completely. Vertically center the single remaining body line in the body region. Keep this panel's outer height and alignment identical to the other panels.\n\n4. In stage 05 \"Lip-sync\", replace ONLY the isolated lips-with-four-crop-corners icon with the corresponding illustration from stage 04 \"Lip-sync\" in reference image 2: a delicate green line drawing of the lower human face, ears, small nose, lips, rounded jaw and neck. Reproduce that reference's elegant face outline and pale-green lip fill, sized to fit the existing icon area above the caption. Remove the crop-frame corner marks. Preserve image 1's \"05\", \"Lip-sync\", and \"Speaker-bound edits\" text, positions, and type sizes.\n\nAbsolute preservation constraints: keep image 1's exact 1774x887 canvas, six-stage layout, green palette, background, logo, header, all other text, the other five illustrations, card geometry, source/output pills, every solid and dashed connector, background-audio bypass and footer unchanged. Do NOT adopt reference image 2's five-stage layout, darker headers, background color, old logo, or labels. No new elements, no other edits, no transparency.",
+      "labels_face_edit_references": [
+        {
+          "role": "edit target",
+          "source": "docs/assets/lightdubber-pipeline-v2.png"
+        },
+        {
+          "role": "original lip-sync face illustration",
+          "source": "docs/assets/lightdubber-pipeline.png"
+        }
       ]
     }
   ],

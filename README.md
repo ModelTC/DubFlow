@@ -5,11 +5,11 @@
   </picture>
 </p>
 
-<h3 align="center">Video translation, with each speaker in the picture.</h3>
+<h3 align="center">End-to-end dubbing for multi-speaker, multi-shot video.</h3>
 
 <p align="center">
-  Translate dialogue, generate voices, and edit lip motion in one modular pipeline.<br />
-  Run local models or connect your own translation and TTS APIs.
+  Translate conversations, clone speaker voices, and synchronize lips across shot changes.<br />
+  Adapt video timing to translated speech and remix it with the original background sound.
 </p>
 
 <p align="center">
@@ -32,18 +32,23 @@
 
 ---
 
-**LightDubber** is a video translation and dubbing framework for single-speaker videos and multi-person conversations. It connects speech recognition, audiovisual speaker binding, translation, voice synthesis, lip-sync, and final composition. Each stage has its own model adapter, so you can replace a model or use an API without rewriting the pipeline.
+**LightDubber** is an open-source video dubbing framework built for **multiple speakers, recurring characters, and changing shots**. It connects who said what to who appears on screen, then translates the conversation, generates dubbed speech, and synchronizes the corresponding faces. Choose to keep the original runtime or adapt eligible segments to the pace of the translated dialogue.
+
+From interviews and dialogue scenes to single-speaker presentations, LightDubber brings translation, voices, lip motion, and timing into one automated workflow. Use local models or connect your own translation and TTS APIs; each stage can be replaced through a shared interface.
 
 <a id="features"></a>
 ## Features
 
-| | What it does |
+| Capability | What it enables |
 | :-- | :-- |
-| **Speaker-aware dubbing** | Associates dialogue with visible speakers and uses reference audio for local voice cloning. |
-| **Multilingual output** | Supports 10 target languages, with automatic source-language detection. |
-| **Flexible model backends** | Uses LightLLM for local translation and LightX2V for lip-sync; translation and TTS also support OpenAI-compatible APIs. |
-| **Adaptive timing** | Fits speech to the original video or adjusts eligible video segments to the translated speech. |
-| **Web UI and CLI** | Upload videos, queue jobs, inspect results, or run the same pipeline from the command line. |
+| **Multiple speakers** | Associate dialogue with on-screen characters using voice, face identity, and visual speaking cues. |
+| **Across shot changes** | Match recurring faces across shots and plan lip-sync edits within each shot's boundaries. |
+| **Contextual translation** | Translate into 10 target languages using surrounding dialogue and speaker history as context, with automatic source-language detection. |
+| **Voice cloning & lip sync** | Use each speaker's reference audio for local voice cloning, then drive the matched face with the translated speech through LightX2V. |
+| **Adaptive duration** | Keep the original runtime, or extend and shorten eligible segments to fit the translated speech. |
+| **Background ambience** | Separate dialogue from background audio, then remix the new voices with the source music and ambient sound. |
+| **Local models or APIs** | Choose local inference or translation/TTS APIs independently, and replace individual models without rewriting the workflow. |
+| **Web UI & CLI** | Upload videos, queue jobs, preview results, or automate the same workflow from the command line. |
 
 **Languages:** Chinese · English · Japanese · Korean · German · French · Russian · Portuguese · Spanish · Italian
 
@@ -82,9 +87,21 @@ https://github.com/user-attachments/assets/ffc9e8b9-be30-41cf-aec9-19c4e5c4f54e
   <img src="docs/assets/lightdubber-pipeline-v2.png" width="1100" alt="LightDubber pipeline: recognize speech and speakers, separate dialogue and background, translate using a local LLM or API, synthesize voices using local TTS or an API, edit lip motion with LightX2V, then composite and export." />
 </p>
 
-**Recognize & bind → Separate → Translate → Synthesize → Lip-sync → Compose.**
+**Dialogue, voices, faces, and timing—all coordinated in one workflow.**
 
-ASR and alignment recover dialogue and timing; visual speaker binding associates each line with a character. Audio separation retains background sound, while translation and TTS produce new dialogue. LightX2V edits the selected face regions, then the pipeline mixes audio and composites the final video. Dialogue without a suitable visible face receives audio dubbing without a mouth edit.
+1. **Map the conversation across shots.** Detect shot boundaries, recover dialogue and timing, and associate spoken lines with recurring on-screen characters.
+2. **Translate and voice each turn.** Use conversational context to translate each line, and generate the new speech with local voice cloning or your chosen TTS API.
+3. **Synchronize the right face.** Drive the matched speaker's mouth with the translated audio, then blend the edited region back into its original shot.
+4. **Fit the dub to the scene.** Remix the background sound and either preserve the original runtime or retime eligible segments together with their audio to match the translated speech.
+
+<details>
+<summary>Timing modes and voice options</summary>
+
+**Fixed duration** fits translated speech into the original timeline. **Adaptive duration** can extend or shorten isolated dialogue segments within a single shot, adjusting video and audio together; segments that cross cuts or overlap other dialogue retain their original duration.
+
+Local Qwen3-TTS supports voice cloning when suitable speaker references are available; API TTS uses the provider's preset voices. Dialogue without a reliable visible face is dubbed without a mouth edit.
+
+</details>
 
 <a id="quick-start"></a>
 ## Quick start
