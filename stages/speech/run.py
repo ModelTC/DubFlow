@@ -1,44 +1,53 @@
 """翻译原片对白，按说话人克隆音色，并在同一时间轴安排目标语言语音。"""
 
-import argparse
 import hashlib
+from dataclasses import dataclass, field
 import json
 import math
-import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+from runtime.utils import file_signature as signature, write_json
 from runtime.clients import Translator
-from runtime.execution import run_python
-from runtime.languages import LANGUAGES
 
-from stages.speech.models import prepare_waveform, translation_prompt
+from stages.speech.model import create_speech_model, translation_prompt
+from stages.speech.utils import (atempo_filter, audio_signature, loudness_references, prepare_waveform, record_timing, save_record,
+                                 summarize_timings)
 
 SHORTENING_ROUNDS = 3
 SHORTENING_TRIGGER_RATIO = 1.1
 SHORTENING_MIN_DURATION_RATIO = .9
 
 
-def write_json(path, value):
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(path)
+@dataclass(frozen=True, kw_only=True)
+class SpeechRequest:
+    """Shared translation, synthesis, and timing settings for one source plan."""
 
-
-def signature(path):
-    path = Path(path).resolve()
-    info = path.stat()
-    return {"path": str(path), "size": info.st_size, "mtime_ns": info.st_mtime_ns}
-
-
-def save_record(output, record):
-    directory = output / "items"
-    directory.mkdir(exist_ok=True)
-    write_json(directory / f"{record['id']}.json", record)
+    plan: str
+    speech_source: str
+    output_dir: str
+    source_language: str
+    target_language: str
+    translation_url: str
+    translation_model: str
+    tts_model: str
+    device: str = "cuda:0"
+    seed: int = 42
+    duration_mode: str = "fixed"
+    translation_backend: str = "lightllm"
+    translation_api_key_env: str = "LIGHTDUBBER_LLM_API_KEY"
+    translation_options: dict = field(default_factory=dict)
+    tts_backend: str = "qwen3tts"
+    tts_url: str = ""
+    tts_api_key_env: str = "LIGHTDUBBER_TTS_API_KEY"
+    tts_voice: str = "alloy"
+    tts_python: str = sys.executable
+    qwen_x_vector_only_mode: bool = True
 
 
 def preserve(record, reason):
@@ -268,20 +277,27 @@ def require_complete_dialogue(records, output, stage, allow_pending=False):
         raise RuntimeError(f"Incomplete translated dialogue at {stage}: {', '.join(row['id'] for row in missing)}")
 
 
-def translate(records, conversation, args, shorten=False, output=None):
-    translator = Translator(args.translation_url, args.translation_model)
+def translate(records, conversation, config, shorten=False, output=None):
+    translator = Translator(config.translation_url, config.translation_model,
+                            config.translation_api_key_env, config.translation_backend, config.translation_options)
     results = []
     try:
         for record in records:
-            text = translator(translation_prompt(record, conversation, args.source_language,
-                                                 args.target_language, shorten))
+            prompt = translation_prompt(record, conversation, config.source_language,
+                                        config.target_language, shorten)
+            started = time.perf_counter()
+            try:
+                text = translator(prompt)
+            finally:
+                if output is not None:
+                    record_timing(output, "translation", time.perf_counter() - started, 1)
             round_number = record.get("shortening_round", int(shorten))
             history = [*record.get("translation_history", []),
                        {"round": round_number, "source_text": record["text"], "text": text,
                         "available_seconds": available_seconds(record),
                         "word_budget": record.get("shortening_word_budget")}]
             item = {**record, "target_text": text, "raw_model_text": text,
-                    "translation_history": history, "translation_source": args.translation_model,
+                    "translation_history": history, "translation_source": config.translation_model,
                     "translation_attempt": round_number, "translation_ready": True,
                     "translation_review": "disabled", "time_compression_policy": "uncapped"}
             if output is not None:
@@ -312,36 +328,71 @@ def prepared_tts(record, reference, path):
     return item
 
 
-def synthesize(records, references, args, output, attempt=0):
-    rows, items = [], []
-    for index, record in enumerate(records):
-        current_attempt = max(attempt, record.get("tts_attempt", 0), record.get("translation_attempt", 0))
-        digest = hashlib.sha256(record["target_text"].encode()).hexdigest()[:12]
-        path = output / f"qwen_{record['id']}_{current_attempt}_{digest}.wav"
-        seed = args.seed + record.get("tts_seed_index", index) + current_attempt * 1000
-        reference = references[record["speaker_id"]]
-        rows.append({"path": str(path), "text": record["target_text"], "reference": reference["path"],
-                     "reference_text": reference["text"], "seed": seed,
-                     "x_vector_only_mode": args.qwen_x_vector_only_mode})
-        fresh = {key: value for key, value in record.items() if not key.startswith("tts_") or key == "tts_seed_index"}
-        items.append({**fresh, "tts_seed": seed, "tts_attempt": current_attempt,
-                      "tts_backend": "qwen3tts", "tts_model": args.tts_model,
-                      "tts_reference_mode": "x_vector_only" if args.qwen_x_vector_only_mode else "in_context",
-                      "reference_speaker_id": record["speaker_id"]})
-    if not rows:
+def synthesis_settings(record, reference, config, backend, seed, index):
+    return {"model": backend.identity, "text": record["target_text"],
+            "language": config.target_language, "speaker_id": record["speaker_id"],
+            "base_seed": config.seed + record.get("tts_seed_index", index), "seed": seed,
+            "reference": audio_signature(reference["path"]) if reference.get("path") else None,
+            "reference_text": reference.get("text", ""),
+            "reference_rms": reference["rms"]}
+
+
+def reusable_tts(record, settings):
+    """Keep the previous sample for identical conditioning; a changed root seed invalidates it."""
+    if record.get("tts_cache_settings") != settings:
+        return False
+    path = Path(record["tts_raw_path"])
+    return path.is_file() and record["tts_signature"] == signature(path)
+
+
+def synthesize(records, references, config, output, attempt=0):
+    if not records:
         return []
-    request = output / f"qwen_request_{attempt}.json"
-    write_json(request, {"model_dir": str(Path(args.tts_model).resolve()),
-                         "device": args.device, "language": args.target_language, "rows": rows})
-    run_python(args.tts_python, "stages.speech.models", ["--qwen-request", str(request)],
-               env={**os.environ, "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}, check=True)
-    results = []
-    for item, row in zip(items, rows):
-        item = prepared_tts(item, references[item["speaker_id"]], Path(row["path"]))
-        save_record(output, item)
-        results.append(item)
-        print(f"Qwen3-TTS {item['id']}: {item['tts_duration']:.3f}s", flush=True)
-    return results
+    backend = create_speech_model(config)
+    rows, pending, results = [], [], {}
+    for index, record in enumerate(records):
+        reference = references[record["speaker_id"]]
+        if "tts_cache_settings" in record:
+            started = time.perf_counter()
+            settings = synthesis_settings(record, reference, config, backend, record["tts_seed"], index)
+            if reusable_tts(record, settings):
+                item = {**record, "tts_reused": True}
+                save_record(output, item)
+                record_timing(output, "tts_cache", time.perf_counter() - started, 1)
+                results[item["id"]] = item
+                print(f"TTS cache {item['id']}: {item['tts_duration']:.3f}s", flush=True)
+                continue
+        current_attempt = max(attempt, record.get("tts_attempt", 0), record.get("translation_attempt", 0))
+        seed = config.seed + record.get("tts_seed_index", index) + current_attempt * 1000
+        settings = synthesis_settings(record, reference, config, backend, seed, index)
+        digest = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:20]
+        path = output / f"tts_{record['id']}_{digest}.wav"
+        rows.append({"path": str(path), "text": record["target_text"], "reference": reference.get("path"),
+                     "reference_text": reference.get("text", ""), "seed": seed,
+                     "x_vector_only_mode": config.qwen_x_vector_only_mode})
+        fresh = {key: value for key, value in record.items() if not key.startswith("tts_") or key == "tts_seed_index"}
+        pending.append({**fresh, "tts_seed": seed, "tts_attempt": current_attempt,
+                        "tts_backend": config.tts_backend, "tts_model": backend.name,
+                        "tts_reference_mode": backend.reference_mode,
+                        "reference_speaker_id": record["speaker_id"] if config.tts_backend == "qwen3tts" else None,
+                        "tts_voice": config.tts_voice if config.tts_backend == "openai_compatible" else None,
+                        "tts_cache_settings": settings, "tts_reused": False})
+    if rows:
+        request = output / f"tts_request_{attempt}.json"
+        write_json(request, {"model": backend.name, "device": config.device,
+                             "language": config.target_language, "rows": rows})
+        missing = sum(not Path(row["path"]).is_file() for row in rows)
+        started = time.perf_counter()
+        try:
+            backend.generate(request)
+        finally:
+            record_timing(output, "tts", time.perf_counter() - started, missing)
+        for item, row in zip(pending, rows):
+            item = prepared_tts(item, references[item["speaker_id"]], Path(row["path"]))
+            save_record(output, item)
+            results[item["id"]] = item
+            print(f"TTS {item['id']}: {item['tts_duration']:.3f}s", flush=True)
+    return [results[record["id"]] for record in records]
 
 
 def placement(record, duration_mode="fixed"):
@@ -377,7 +428,7 @@ def speech_attempt(record, round_number):
                       tts_natural_duration=record.get("tts_natural_duration", record["tts_duration"]),
                       effective_tempo=effective_tempo(record), tts_attempt=record["tts_attempt"],
                       tts_seed=record.get("tts_seed"), post_tempo=placement(record)[1],
-                      fits=placement(record)[1] == 1)
+                      fits=placement(record)[1] == 1, tts_reused=record.get("tts_reused", False))
     return result
 
 
@@ -393,9 +444,9 @@ def shortening_budget(record, language):
     return max(units + 1, estimate)
 
 
-def shorten_to_fit(records, references, args, output):
+def shorten_to_fit(records, references, config, output):
     """Use measured TTS duration for up to three revisions, keeping the best dub."""
-    if getattr(args, "duration_mode", "fixed") == "adaptive_video":
+    if config.duration_mode == "adaptive_video":
         return records  # The picture follows natural speech; do not shorten the translation as well.
     best, probe, attempts, histories = {}, {}, {}, {}
     for record in records:
@@ -419,7 +470,7 @@ def shorten_to_fit(records, references, args, output):
         for record in records:
             key = record["id"]
             selected = best[key]
-            if selected["status"] == "preserve_original":
+            if selected["status"] == "preserve_original" or selected.get("shortening_stopped_reason"):
                 continue
             completed = selected.get("shortening_rounds_completed", 0)
             capacity = available_seconds(selected)
@@ -432,40 +483,33 @@ def shorten_to_fit(records, references, args, output):
             pending.append({**previous_probe, "translation_history": histories[key],
                             "speech_attempts": attempts[key], "shortening_round": round_number,
                             "available_seconds": capacity,
-                            "shortening_word_budget": shortening_budget(previous_probe, args.target_language)})
+                            "shortening_word_budget": shortening_budget(previous_probe, config.target_language)})
         if not pending:
             continue
         round_output = output / f"shortening_round_{round_number}"
         round_output.mkdir(exist_ok=True)
-        shortened = translate(pending, records, args, shorten=True, output=round_output)
-        for candidate in synthesize(shortened, references, args, round_output, attempt=round_number):
+        shortened = translate(pending, records, config, shorten=True, output=round_output)
+        for candidate in synthesize(shortened, references, config, round_output, attempt=round_number):
             key = candidate["id"]
             selected = best[key]
             capacity = available_seconds(selected)
             histories[key] = candidate["translation_history"]
             attempts[key] = [*attempts[key], speech_attempt(candidate, round_number)]
             probe[key] = candidate
-            if (candidate["tts_duration"] >= SHORTENING_MIN_DURATION_RATIO * capacity
-                    and abs(candidate["tts_duration"] - capacity) < abs(selected["tts_duration"] - capacity)):
+            improved = (candidate["tts_duration"] >= SHORTENING_MIN_DURATION_RATIO * capacity
+                        and abs(candidate["tts_duration"] - capacity) < abs(selected["tts_duration"] - capacity))
+            if improved:
                 selected = candidate
             selected = {**selected, "translation_history": histories[key], "speech_attempts": attempts[key],
                         "shortening_rounds_completed": round_number,
                         "shortening_word_budget": candidate["shortening_word_budget"]}
+            if candidate.get("tts_reused"):
+                selected["shortening_stopped_reason"] = "unchanged_translation"
+            elif not improved:
+                selected["shortening_stopped_reason"] = "no_duration_improvement"
             best[key] = selected
             save_record(output, selected)
     return [best[record["id"]] for record in records]
-
-
-def atempo_filter(tempo):
-    factors = []
-    while tempo < .5:
-        factors.append(.5)
-        tempo *= 2
-    while tempo > 2:
-        factors.append(2.)
-        tempo /= 2
-    factors.append(tempo)
-    return ",".join(f"atempo={factor:.10g}" for factor in factors)
 
 
 def align_record(record, output, duration_mode="fixed"):
@@ -499,7 +543,7 @@ def align_record(record, output, duration_mode="fixed"):
     return row, audio
 
 
-def assemble(records, references, plan, args, output):
+def assemble(records, references, plan, config, output):
     duration = plan["frames"] / plan["fps"]
     samples = round(duration * 48000)
     tracks = {speaker: np.zeros((samples, 2), np.float32) for speaker in references}
@@ -508,7 +552,7 @@ def assemble(records, references, plan, args, output):
         if record["status"] == "preserve_original":
             row, aligned = record, None
         else:
-            row, aligned = align_record(record, output, getattr(args, "duration_mode", "fixed"))
+            row, aligned = align_record(record, output, config.duration_mode)
         if aligned is None:
             save_record(output, preserve(record, row["reason"]))
             row = {**row, "attempted_target_text": row.get("target_text")}
@@ -534,9 +578,9 @@ def assemble(records, references, plan, args, output):
                         "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(drive_path)], check=True)
         speaker_paths[speaker] = str(drive_path)
     successful = [row for row in utterances if row["status"] == "translated"]
-    result = {"source_plan": str(Path(args.plan).resolve()), "source_speech": str(Path(args.speech_source).resolve()),
-              "source_language": args.source_language, "target_language": args.target_language,
-              "duration": duration, "sample_rate": 48000, "global_gain": gain, "seed": args.seed,
+    result = {"source_plan": str(Path(config.plan).resolve()), "source_speech": str(Path(config.speech_source).resolve()),
+              "source_language": config.source_language, "target_language": config.target_language,
+              "duration": duration, "sample_rate": 48000, "global_gain": gain, "seed": config.seed,
               "utterances": utterances, "target_speech_path": str(target_path),
               "speaker_tracks": speaker_paths, "voice_references": references,
               "replace_intervals": [{"id": row["id"], **row["source_interval"]} for row in successful],
@@ -545,24 +589,34 @@ def assemble(records, references, plan, args, output):
     result.update(audio_policy="complete_dialogue", audio_complete=True)
     (output / "source_text.txt").write_text("\n".join(f"{row['id']} {row['text']}" for row in utterances) + "\n")
     (output / "translated.txt").write_text("\n".join(f"{row['id']} {row['target_text']}" for row in successful) + "\n")
+    timings = summarize_timings(output)
+    if timings is not None:
+        result["timings"] = timings
     write_json(output / "dialogue.json", result)
     return result
 
 
-def run(args):
-    output = Path(args.output_dir).resolve()
+def run_speech(config):
+    output = Path(config.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    duration_mode = getattr(args, "duration_mode", "fixed")
-    request = {"plan": signature(args.plan), "source_speech": signature(args.speech_source),
-               "source_language": args.source_language,
-               "target_language": args.target_language, "duration_mode": duration_mode,
-               "seed": args.seed, "recipe": 10}
+    duration_mode = config.duration_mode
+    request = {"plan": signature(config.plan), "source_speech": signature(config.speech_source),
+               "source_language": config.source_language,
+               "target_language": config.target_language, "duration_mode": duration_mode,
+               "seed": config.seed, "recipe": 11}
+    backend = create_speech_model(config)
     request["backends"] = {
-        "translation_url": args.translation_url, "translation_model": args.translation_model,
-        "tts_backend": "qwen3tts", "tts_model": str(Path(args.tts_model).resolve()),
-        "tts_python": args.tts_python, "qwen_x_vector_only_mode": args.qwen_x_vector_only_mode,
+        "tts_identity": backend.identity,
+        "translation_url": config.translation_url, "translation_model": config.translation_model,
+        "translation_backend": config.translation_backend, "translation_api_key_env": config.translation_api_key_env,
+        "translation_options": config.translation_options,
+        "tts_backend": config.tts_backend,
+        "tts_model": str(Path(config.tts_model).resolve()) if config.tts_backend == "qwen3tts" else config.tts_model,
+        "tts_url": config.tts_url, "tts_voice": config.tts_voice, "tts_api_key_env": config.tts_api_key_env,
+        "tts_python": config.tts_python, "qwen_x_vector_only_mode": config.qwen_x_vector_only_mode,
         "speech_adapter": signature(Path(__file__)),
-        "adapter": signature(Path(__file__).with_name("models.py")),
+        "adapter": signature(Path(__file__).with_name("model.py")),
+        "utils": signature(Path(__file__).with_name("utils.py")),
     }
     request["backends"].update(translation_review="disabled", shortening_rounds=0 if duration_mode == "adaptive_video" else SHORTENING_ROUNDS,
                                time_compression_policy="uncapped", max_tempo=None, audio_policy="complete_dialogue")
@@ -571,20 +625,34 @@ def run(args):
         if json.loads(request_path.read_text()) != request:
             raise ValueError("Speech output belongs to another request; choose a new directory")
         if (output / "dialogue.json").exists():
-            return json.loads((output / "dialogue.json").read_text())
+            completed = json.loads((output / "dialogue.json").read_text())
+            for index, record in enumerate(completed["utterances"]):
+                if record["status"] == "preserve_original":
+                    continue
+                reference = completed["voice_references"][record["speaker_id"]]
+                if reference.get("path") and not Path(reference["path"]).is_file():
+                    break
+                settings = synthesis_settings(record, reference, config, backend, record["tts_seed"], index)
+                if not reusable_tts(record, settings):
+                    break
+            else:
+                return completed
     else:
         if any(output.iterdir()):
             raise FileExistsError(output)
         write_json(request_path, request)
-    plan = json.loads(Path(args.plan).read_text())
+    plan = json.loads(Path(config.plan).read_text())
     records = speaking_windows(plan)
     if duration_mode == "adaptive_video":
         eligible = adaptive_shrink_candidates(records, plan)
         records = [{**record, "adaptive_shrink_eligible": record["id"] in eligible} for record in records]
-    audio, rate = sf.read(args.speech_source, dtype="float32", always_2d=True)
+    audio, rate = sf.read(config.speech_source, dtype="float32", always_2d=True)
     if rate != 48000 or len(audio) != round(plan["frames"] / plan["fps"] * rate):
         raise ValueError("Source speech must share the plan's 48kHz timeline")
-    references = voice_references(records, audio.mean(1), rate, output, speaker_bindings=plan.get("speakers"))
+    if config.tts_backend == "qwen3tts":
+        references = voice_references(records, audio.mean(1), rate, output, speaker_bindings=plan.get("speakers"))
+    else:
+        references = loudness_references(records, audio.mean(1), rate, config.tts_voice)
     write_json(output / "voice_references.json", references)
     for index, record in enumerate(records):
         checkpoint = output / "items" / f"{record['id']}.json"
@@ -597,37 +665,39 @@ def run(args):
     pending = [record for record in records if record["status"] != "preserve_original"
                and not record.get("translation_ready")]
     if pending:
-        translated = {record["id"]: record for record in translate(pending, records, args, output=output)}
+        translated = {record["id"]: record for record in translate(pending, records, config, output=output)}
         records = [translated.get(record["id"], record) for record in records]
-    ready = [record for record in records if record["status"] != "preserve_original"
-             and not (record.get("tts_raw_path") and Path(record["tts_raw_path"]).is_file())]
-    synthesized = {record["id"]: record for record in synthesize(ready, references, args, output)} if ready else {}
+    ready = [record for record in records if record["status"] != "preserve_original"]
+    synthesized = {record["id"]: record for record in synthesize(ready, references, config, output)} if ready else {}
     records = [synthesized.get(record["id"], record) for record in records]
-    records = shorten_to_fit(records, references, args, output)
+    records = shorten_to_fit(records, references, config, output)
     for record in records:
         save_record(output, record)
-    return assemble(records, references, plan, args, output)
+    result = assemble(records, references, plan, config, output)
+    timings = result.get("timings")
+    if timings is not None:
+        print(f"Speech timing: translation={timings['translation_seconds']:.3f}s "
+              f"({timings['translation_requests']} requests), "
+              f"TTS={timings['tts_seconds']:.3f}s "
+              f"({timings['tts_batches']} batches, {timings['tts_requested_utterances']} utterance attempts, "
+              f"{timings['tts_cache_hits']} cache hits)", flush=True)
+    return result
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", required=True)
-    parser.add_argument("--speech-source", required=True)
-    parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--source-language", choices=LANGUAGES, default="zh")
-    parser.add_argument("--target-language", choices=LANGUAGES, required=True)
-    parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--translation-url", required=True, help="OpenAI 兼容翻译接口地址，包含 /v1")
-    parser.add_argument("--translation-model", required=True, help="翻译服务中的模型名称")
-    parser.add_argument("--tts-model", required=True, help="本地 TTS 权重目录")
-    parser.add_argument("--tts-python", default=sys.executable, help="TTS 解释器")
-    parser.add_argument("--qwen-x-vector-only-mode", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--duration-mode", choices=("fixed", "adaptive_video"), default="fixed")
-    args = parser.parse_args()
-    result = run(args)
-    print(json.dumps({"dialogue": str(Path(args.output_dir).resolve() / "dialogue.json"), **result["counts"]}, ensure_ascii=False))
-
-
-if __name__ == "__main__":
-    main()
+def run_stage(*, plan, speech_source, output_dir, source_language, target_language,
+              translation_url, translation_model, tts_model, device="cuda:0", seed=42,
+              duration_mode="fixed", translation_backend="lightllm",
+              translation_api_key_env="LIGHTDUBBER_LLM_API_KEY", translation_options=None, tts_backend="qwen3tts",
+              tts_url="", tts_api_key_env="LIGHTDUBBER_TTS_API_KEY", tts_voice="alloy",
+              tts_python=sys.executable, qwen_x_vector_only_mode=True):
+    request = SpeechRequest(
+        plan=plan, speech_source=speech_source, output_dir=output_dir,
+        source_language=source_language, target_language=target_language,
+        translation_url=translation_url, translation_model=translation_model, tts_model=tts_model,
+        device=device, seed=seed, duration_mode=duration_mode,
+        translation_backend=translation_backend, translation_api_key_env=translation_api_key_env,
+        translation_options=translation_options or {},
+        tts_backend=tts_backend, tts_url=tts_url, tts_api_key_env=tts_api_key_env,
+        tts_voice=tts_voice, tts_python=tts_python, qwen_x_vector_only_mode=qwen_x_vector_only_mode,
+    )
+    return run_speech(request)

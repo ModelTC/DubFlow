@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from runtime.config import ROOT, load_config
 from runtime.languages import LANGUAGE_LABELS
 from runtime.languages import LANGUAGES as SUPPORTED_LANGUAGES
-from stages.speech.models import validate_qwen_assets
+from stages.speech.model import validate_qwen_assets
 from starlette.requests import ClientDisconnect
 
 STATIC = Path(__file__).parent / "static"
@@ -235,7 +235,7 @@ def result_video_name(row, state):
 
 
 def translation_model_name(config):
-    backend = {"lightllm": "LightLLM", "vllm": "vLLM"}[config.get("translation_backend", "lightllm")]
+    backend = {"lightllm": "LightLLM", "vllm": "vLLM", "openai_compatible": "API"}[config.get("translation_backend", "lightllm")]
     return f"{config['translation_model']} · {backend}"
 
 
@@ -247,23 +247,24 @@ def profile_catalog(settings):
     missing = []
     for key, label in (("asr_model", "Qwen3-ASR"), ("alignment_model", "Qwen3 对齐器"),
                        ("diar_model", "Nemotron 3")):
-        path = ROOT / config.get(key, "")
+        path = Path(config[key])
         metadata = "config.json"
         has_weights = any(any(path.glob(pattern)) for pattern in ("*.safetensors", "*.bin", "*.pth"))
         if not (path / metadata).is_file() or not has_weights:
             missing.append(label)
-    sam = ROOT / config.get("sam_audio_model", "")
+    sam = Path(config["sam_audio_model"])
     if not all((sam / name).is_file() for name in ("config.json", "checkpoint.pt")):
         missing.append("SAM-Audio")
-    text_encoder = ROOT / config.get("sam_audio_text_encoder", "")
+    text_encoder = Path(config["sam_audio_text_encoder"])
     if (not (text_encoder / "config.json").is_file() or
             not any((text_encoder / name).is_file() for name in ("model.safetensors", "pytorch_model.bin")) or
             not any((text_encoder / name).is_file() for name in ("tokenizer.json", "spiece.model"))):
         missing.append("SAM 文本编码器")
-    try:
-        validate_qwen_assets(ROOT / config["tts_model"])
-    except FileNotFoundError:
-        missing.append("Qwen3-TTS 1.7B Base")
+    if config.get("tts_backend", "qwen3tts") == "qwen3tts":
+        try:
+            validate_qwen_assets(Path(config["tts_model"]))
+        except FileNotFoundError:
+            missing.append("Qwen3-TTS 1.7B Base")
     return [{"id": "modern", **PROFILES["modern"],
              "models": job_models("modern", {"request": {"config": config | {"content_verification": "disabled"}}}),
              "available": not missing, "reason": "尚未就绪：" + "、".join(missing) if missing else ""}]
@@ -275,7 +276,8 @@ def job_models(profile, state):
     if not config:
         return models
     names = {"对白分离": "SAM-Audio Large-TV", "翻译": translation_model_name(config),
-             "配音": "Qwen3-TTS 1.7B Base", "口型": "TBDub Student · LightX2V",
+             "配音": ("Qwen3-TTS 1.7B Base" if config.get("tts_backend", "qwen3tts") == "qwen3tts"
+                    else f"{config['tts_model']} · API"), "口型": "TBDub Student · LightX2V",
              "词时间": "Qwen3-ForcedAligner-0.6B"}
     return [model | {"name": names[model["stage"]]} if model["stage"] in names else model for model in models]
 

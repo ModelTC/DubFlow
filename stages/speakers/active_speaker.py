@@ -1,38 +1,16 @@
 """UniTalk-LoCoNet: score a tracked face against original audio and nearby faces."""
 
 import random
-from pathlib import Path
-from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import torch
-from runtime.models import get
 from scipy.ndimage import uniform_filter1d
-from third_party.loconet.model.loconet_encoder import locoencoder
-from third_party.loconet.torchvggish import mel_features, vggish_params
+from stages.speakers.models.loconet import mel_features, audio_config
 
 ASD_POLICY = "unitalk_loconet_tight_context3_v1"
 MAX_WINDOW_FRAMES = 500
 CONTEXT_FRAMES = 25
-
-
-def _create_loconet(checkpoint, device):
-    cfg = SimpleNamespace(MODEL=SimpleNamespace(NUM_SPEAKERS=3, AV_layers=3, ADJUST_ATTENTION=0))
-    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
-    state = {key.removeprefix("model.module."): value for key, value in state.items()}
-    model = locoencoder(cfg)
-    model.load_state_dict({key.removeprefix("model."): value for key, value in state.items()
-                           if key.startswith("model.")}, strict=True)
-    classifier = torch.nn.Linear(256, 2)
-    classifier.load_state_dict({key.removeprefix("lossAV.FC."): value for key, value in state.items()
-                                if key.startswith("lossAV.FC.")}, strict=True)
-    return model.to(device).eval(), classifier.to(device).eval()
-
-
-def load_loconet(checkpoint, device):
-    checkpoint = Path(checkpoint).resolve()
-    return get(("unitalk_loconet", str(checkpoint), device), lambda: _create_loconet(checkpoint, device))
 
 
 def context_tracks(target, tracks, center):
@@ -84,11 +62,11 @@ def audio_features(waveform, frames):
     audio = waveform[start:start + needed]
     audio = np.pad(audio, (0, max(0, needed - len(audio))))
     features = mel_features.log_mel_spectrogram(
-        audio, audio_sample_rate=16000, log_offset=vggish_params.LOG_OFFSET,
-        window_length_secs=vggish_params.STFT_WINDOW_LENGTH_SECONDS,
-        hop_length_secs=vggish_params.STFT_HOP_LENGTH_SECONDS,
-        num_mel_bins=vggish_params.NUM_MEL_BINS, lower_edge_hertz=vggish_params.MEL_MIN_HZ,
-        upper_edge_hertz=vggish_params.MEL_MAX_HZ)
+        audio, audio_sample_rate=16000, log_offset=audio_config.LOG_OFFSET,
+        window_length_secs=audio_config.STFT_WINDOW_LENGTH_SECONDS,
+        hop_length_secs=audio_config.STFT_HOP_LENGTH_SECONDS,
+        num_mel_bins=audio_config.NUM_MEL_BINS, lower_edge_hertz=audio_config.MEL_MIN_HZ,
+        upper_edge_hertz=audio_config.MEL_MAX_HZ)
     count = len(frames) * 4
     if len(features) < count:
         features = np.pad(features, ((0, count - len(features)), (0, 0)), mode="wrap")

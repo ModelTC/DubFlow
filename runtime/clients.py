@@ -1,15 +1,29 @@
-"""HTTP clients for the dedicated translation and lip-sync GPUs."""
+"""HTTP clients for local services and configurable translation/TTS APIs."""
 
+import os
 import time
 
 import requests
 
 
+def api_session(api_key_env, use_environment=False):
+    session = requests.Session()
+    session.trust_env = use_environment
+    token = os.environ.get(api_key_env) if api_key_env else None
+    if token:
+        session.headers["Authorization"] = f"Bearer {token}"
+    return session
+
+
 class Translator:
-    def __init__(self, url, model):
-        self.url, self.model = url.rstrip("/"), model
-        self.session = requests.Session()
-        self.session.trust_env = False
+    def __init__(self, url, model, api_key_env="LIGHTDUBBER_LLM_API_KEY", backend="lightllm", options=None):
+        self.url, self.model, self.backend = url.rstrip("/"), model, backend
+        self.session = api_session(api_key_env, use_environment=backend == "openai_compatible")
+        self.options = {}
+        if backend in ("lightllm", "vllm"):
+            self.options.update(temperature=0, max_tokens=1024,
+                                chat_template_kwargs={"enable_thinking": False})
+        self.options.update(options or {})
 
     def health(self):
         response = self.session.get(f"{self.url}/models", timeout=(5, 10))
@@ -18,21 +32,40 @@ class Translator:
             raise RuntimeError(f"Translation service does not serve {self.model}")
 
     def __call__(self, prompt):
-        response = self.session.post(f"{self.url}/chat/completions", json={
+        payload = {
+            **self.options,
             "model": self.model,
             "messages": [
                 {"role": "system", "content": "Translate faithfully. Output only the translated spoken words, without commentary."},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0, "max_tokens": 1024,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }, timeout=(10, 300))
+            "stream": False,
+        }
+        response = self.session.post(f"{self.url}/chat/completions", json=payload, timeout=(10, 300))
         response.raise_for_status()
         choice = response.json()["choices"][0]
         text = choice["message"]["content"]
         if choice["finish_reason"] != "stop" or not text or not text.strip():
             raise RuntimeError(f"Translation did not finish: {choice['finish_reason']}")
         return text.strip()
+
+    def close(self):
+        self.session.close()
+
+
+class SpeechSynthesizer:
+    """OpenAI-compatible audio/speech endpoint with a configured preset voice."""
+
+    def __init__(self, url, model, voice, api_key_env="LIGHTDUBBER_TTS_API_KEY"):
+        self.url, self.model, self.voice = url.rstrip("/"), model, voice
+        self.session = api_session(api_key_env, use_environment=True)
+
+    def __call__(self, text):
+        response = self.session.post(f"{self.url}/audio/speech", json={
+            "model": self.model, "input": text, "voice": self.voice, "response_format": "wav",
+        }, timeout=(10, 300))
+        response.raise_for_status()
+        return response.content
 
     def close(self):
         self.session.close()

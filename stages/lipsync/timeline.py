@@ -231,5 +231,3 @@ def write_drive(path, mono, job, fps):
         waveform.setsampwidth(2)
         waveform.setframerate(16000)
         waveform.writeframes(drive.astype("<i2").tobytes())
-
-

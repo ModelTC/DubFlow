@@ -1,24 +1,25 @@
-"""Private, serial model engines keep incompatible environments resident on one GPU."""
+"""Resident model interpreters communicate through structured Python calls."""
 
 import argparse
 import io
 import json
+import logging
 import os
-import runpy
 import subprocess
 import sys
 import traceback
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from runtime.config import ROOT
+from runtime.environment import native_environment
+from runtime.execution import FunctionCall
 
 
 class Channel:
     def __init__(self):
         self.reader = sys.stdin
         self.writer = os.fdopen(os.dup(sys.stdout.fileno()), "w", buffering=1)
-        # Native libraries may write directly to fd 1; only this duplicate carries protocol messages.
         os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
 
     def send(self, value):
@@ -32,33 +33,73 @@ class Channel:
         return json.loads(line)
 
 
-def run_module(module, arguments, input_text=None):
-    original_argv, original_stdin = sys.argv, sys.stdin
-    sys.argv = [module, *arguments]
-    if input_text is not None:
-        sys.stdin = io.StringIO(input_text)
+def execute_call(call, capture=False):
+    output, errors = io.StringIO(), io.StringIO()
     try:
-        runpy.run_module(module, run_name="__main__")
-    except SystemExit as error:
-        if error.code:
-            raise subprocess.CalledProcessError(error.code if isinstance(error.code, int) else 1, sys.argv) from None
-    finally:
-        sys.argv, sys.stdin = original_argv, original_stdin
+        if capture:
+            with redirect_stdout(output), redirect_stderr(errors):
+                call.invoke()
+        else:
+            call.invoke()
+        return {"type": "done", "returncode": 0, "stdout": output.getvalue(), "stderr": errors.getvalue()}
+    except Exception as error:
+        traceback.print_exc()
+        return {"type": "done", "returncode": getattr(error, "returncode", 1),
+                "stdout": output.getvalue(), "stderr": errors.getvalue() + str(error)}
+
+
+def completed_call(python, call, result, check):
+    completed = subprocess.CompletedProcess([python, call.module, call.function], result["returncode"],
+                                            stdout=result.get("stdout", ""), stderr=result.get("stderr", ""))
+    if check:
+        completed.check_returncode()
+    return completed
+
+
+@contextmanager
+def stage_output(path):
+    logger = logging.getLogger()
+    previous, level = list(logger.handlers), logger.level
+    with Path(path).open("a") as log:
+        handler = logging.StreamHandler(log)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        logger.handlers = [handler]
+        logger.setLevel(logging.INFO)
+        try:
+            with redirect_stdout(log), redirect_stderr(log):
+                yield
+        finally:
+            logger.handlers = previous
+            logger.setLevel(level)
+            handler.close()
 
 
 def model_roles(config):
     roles = {}
-    entries = [(config["audio_python"], "recognition"), (config["speech_python"], "recognition"),
+    entries = [(config["audio_python"], "recognition"), (config["speech_python"], "speech"),
                (config["separation_python"], "separation"), (config["video_python"], "video"),
-               (config["vision_python"], "vision"),
-               (config["identity_python"], "identity"),
-               (config["tts_python"], "tts")]
+               (config["vision_python"], "vision"), (config["identity_python"], "identity")]
+    if config["tts_backend"] == "qwen3tts":
+        entries.append((config["tts_python"], "tts"))
     for interpreter, role in entries:
-        python = str((ROOT / interpreter).absolute())
-        selected = roles.setdefault(python, [])
+        selected = roles.setdefault(str(Path(interpreter).absolute()), [])
         if role not in selected:
             selected.append(role)
     return roles
+
+
+def check_services(config):
+    from runtime.clients import LipSync, Translator
+
+    clients = [LipSync(config["tbdub_url"])]
+    if config["translation_backend"] in ("lightllm", "vllm"):
+        clients.append(Translator(config["translation_url"], config["translation_model"],
+                                  api_key_env=config["translation_api_key_env"], backend=config["translation_backend"]))
+    for client in clients:
+        try:
+            client.health()
+        finally:
+            client.close()
 
 
 def warm_models(roles, config):
@@ -66,59 +107,32 @@ def warm_models(roles, config):
 
     enable()
     device = "cuda:0"
-    from runtime.clients import LipSync, Translator
-    for client in (Translator(config["translation_url"], config["translation_model"]), LipSync(config["tbdub_url"])):
-        try:
-            client.health()
-        finally:
-            client.close()
     for role in roles:
         print(f"Loading resident models: {role}", flush=True)
         if role == "recognition":
-            from stages.recognition.models import (
-                QwenForcedAligner,
-                nemotron3_model,
-                qwen_asr,
-            )
+            from stages.recognition.model import QwenForcedAligner, nemotron3_model, qwen_asr
             qwen_asr(config["asr_model"], device)
             QwenForcedAligner(config["alignment_model"], device).close()
             nemotron3_model(config["diar_model"], device)
         elif role == "separation":
-            from stages.separate import load_sam
+            from stages.separation.model import load_sam
             load_sam(Path(config["sam_audio_model"]), Path(config["sam_audio_text_encoder"]), device)
         elif role == "tts":
-            from stages.speech.models import load_qwen
+            from stages.speech.model import load_qwen
             load_qwen(config["tts_model"], device)
         elif role == "video":
-            from stages.lipsync.crop import load_landmarker
+            from stages.lipsync.model import load_landmarker
             load_landmarker(config["landmarker_model"])
         elif role == "vision":
-            from stages.speakers.active_speaker import load_loconet
-            from stages.speakers.detect import load_s3fd
-            repo = ROOT / config["s3fd_repo"]
-            load_s3fd(repo, config["s3fd_model"], device)
-            load_loconet(ROOT / config["loconet_model"], device)
+            from stages.speakers.model import load_loconet, load_s3fd
+            load_s3fd(config["s3fd_model"], device)
+            load_loconet(config["loconet_model"], device)
         elif role == "identity":
-            from stages.speakers.identity import load_face_encoder
+            from stages.speakers.model import load_face_encoder
             load_face_encoder(config["identity_model"])
-        else:
+        elif role != "speech":
             raise ValueError(f"Unknown resident model role: {role}")
     return info()
-
-
-def native_library_paths(python):
-    # 保留虚拟环境的解释器路径；resolve() 会跟随软链跳到系统 Python。
-    environment = Path(python).absolute().parent.parent
-    paths = [*sorted(environment.glob("lib/python*/site-packages/nvidia/*/lib")), environment / "lib/ffmpeg"]
-    return [str(path) for path in paths if path.is_dir()]
-
-
-def native_environment(python, environment):
-    libraries = native_library_paths(python)
-    if not libraries:
-        return environment
-    existing = environment.get("LD_LIBRARY_PATH")
-    return {**environment, "LD_LIBRARY_PATH": ":".join([*libraries, *([existing] if existing else [])])}
 
 
 class Engine:
@@ -130,10 +144,9 @@ class Engine:
         environment = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONUNBUFFERED": "1",
                        "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "MODELSCOPE_OFFLINE": "1",
                        "TOKENIZERS_PARALLELISM": "false", "OMP_NUM_THREADS": "4", "OPENBLAS_NUM_THREADS": "4"}
-        environment = native_environment(python, environment)
-        self.process = subprocess.Popen(command, cwd=ROOT, env=environment, stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=self.log, text=True, bufsize=1,
-                                        pass_fds=inherited_fds)
+        self.process = subprocess.Popen(command, cwd=ROOT, env=native_environment(python, environment),
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
+                                        text=True, bufsize=1, pass_fds=inherited_fds)
         self.reader, self.writer = self.process.stdout, self.process.stdin
 
     def receive(self):
@@ -161,9 +174,9 @@ class Engine:
 
 class StagePool:
     def __init__(self, config, config_path, gpu, log_directory, inherited_fds=()):
-        self.engines = {}
-        self.loaded = []
+        self.engines, self.loaded = {}, []
         self.current_log = None
+        check_services(config)
         try:
             for python, roles in model_roles(config).items():
                 engine = Engine(python, roles, config_path, gpu, log_directory, inherited_fds)
@@ -176,30 +189,28 @@ class StagePool:
             self.close()
             raise
 
-    def call(self, python, module, arguments, input_text=None, check=True):
+    def call(self, python, call, capture=False, check=True):
         engine = self.engines[str(Path(python).absolute())]
-        engine.send({"type": "run", "module": module, "arguments": list(map(str, arguments)),
-                     "input": input_text, "log": str(self.current_log)})
+        engine.send({"type": "run", "call": call.payload(), "capture": capture, "log": str(self.current_log)})
         while True:
             result = engine.receive()
             if result["type"] == "call":
                 try:
-                    nested = self.call(result["python"], result["module"], result["arguments"], result["input"], False)
-                    engine.send({"type": "return", "returncode": nested.returncode, "stderr": nested.stderr})
+                    nested = self.call(result["python"], FunctionCall(**result["call"]), result["capture"], False)
+                    response = {"type": "return", "returncode": nested.returncode,
+                                "stdout": nested.stdout, "stderr": nested.stderr}
                 except Exception as error:
-                    engine.send({"type": "return", "returncode": 1, "stderr": str(error)})
+                    response = {"type": "return", "returncode": 1, "stdout": "", "stderr": str(error)}
+                engine.send(response)
                 continue
             if result["type"] != "done":
                 raise RuntimeError("Unexpected resident stage response")
-            completed = subprocess.CompletedProcess([python, module, *arguments], result["returncode"], stderr=result.get("error", ""))
-            if check:
-                completed.check_returncode()
-            return completed
+            return completed_call(python, call, result, check)
 
-    def execute(self, python, module, arguments, log_path, environment):
+    def execute(self, python, call, log_path, environment):
         self.current_log = Path(log_path)
         self.current_log.parent.mkdir(parents=True, exist_ok=True)
-        self.call(str(python), module, arguments)
+        self.call(str(python), call)
 
     def snapshot(self):
         snapshots = []
@@ -213,30 +224,26 @@ class StagePool:
             engine.close()
 
 
+class EngineDispatcher:
+    def __init__(self, channel):
+        self.channel = channel
+        self.python = str(Path(sys.executable).absolute())
+
+    def __call__(self, interpreter, call, capture, check):
+        if str(Path(interpreter).absolute()) == self.python:
+            result = execute_call(call, capture)
+        else:
+            self.channel.send({"type": "call", "python": interpreter, "call": call.payload(), "capture": capture})
+            result = self.channel.receive()
+        return completed_call(interpreter, call, result, check)
+
+
 def engine_loop(config_path, roles):
     from runtime.config import load_config
     from runtime.execution import bind
 
     channel = Channel()
-    python = str(Path(sys.executable).absolute())
-
-    def nested(interpreter, module, arguments, input_text, check):
-        if str(Path(interpreter).absolute()) == python:
-            try:
-                run_module(module, arguments, input_text)
-                result = subprocess.CompletedProcess([interpreter, module, *arguments], 0, stderr="")
-            except Exception as error:
-                result = subprocess.CompletedProcess([interpreter, module, *arguments], 1, stderr=str(error))
-        else:
-            channel.send({"type": "call", "python": interpreter, "module": module,
-                          "arguments": arguments, "input": input_text})
-            result = channel.receive()
-            result = subprocess.CompletedProcess([interpreter, module, *arguments], result["returncode"], stderr=result["stderr"])
-        if check:
-            result.check_returncode()
-        return result
-
-    bind(nested)
+    bind(EngineDispatcher(channel))
     with redirect_stdout(sys.stderr):
         try:
             models = warm_models(roles, load_config(config_path))
@@ -254,13 +261,8 @@ def engine_loop(config_path, roles):
             from runtime.models import info
             channel.send({"type": "info", "models": info()})
             continue
-        with Path(request["log"]).open("a") as log, redirect_stdout(log), redirect_stderr(log):
-            try:
-                run_module(request["module"], request["arguments"], request["input"])
-                result = {"type": "done", "returncode": 0}
-            except Exception as error:
-                traceback.print_exc()
-                result = {"type": "done", "returncode": getattr(error, "returncode", 1), "error": str(error)}
+        with stage_output(request["log"]):
+            result = execute_call(FunctionCall(**request["call"]), request["capture"])
         channel.send(result)
 
 

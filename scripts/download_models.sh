@@ -52,9 +52,13 @@ core() {
 
 }
 
-speech() {
+recognition() {
   mkdir -p "$MODEL_DIR"
   "$PYTHON_BIN" "$ROOT/scripts/download_recognition.py" --model-dir "$MODEL_DIR"
+}
+
+speech() {
+  recognition
   hf download Qwen/Qwen3-TTS-12Hz-1.7B-Base \
     --revision fd4b254389122332181a7c3db7f27e918eec64e3 \
     --local-dir "$MODEL_DIR/Qwen3-TTS-12Hz-1.7B-Base"
@@ -84,9 +88,10 @@ qwen35_translation() {
 case "$MODE" in
   core) core ;;
   speech) speech ;;
+  recognition) recognition ;;
   loconet) loconet ;;
   sam-audio) sam_audio ;;
   qwen35-translation) qwen35_translation ;;
   all) core; speech; sam_audio; qwen35_translation ;;
-  *) echo "用法：bash scripts/download_models.sh [core|speech|loconet|sam-audio|qwen35-translation|all]" >&2; exit 2 ;;
+  *) echo "用法：bash scripts/download_models.sh [core|speech|recognition|loconet|sam-audio|qwen35-translation|all]" >&2; exit 2 ;;
 esac

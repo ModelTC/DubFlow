@@ -1,0 +1,5 @@
+# Qwen3-TTS currently requires Transformers 4.x; the main pipeline uses 5.x.
+qwen-tts==0.1.1
+transformers==4.57.3
+accelerate==1.12.0
+soundfile==0.13.1

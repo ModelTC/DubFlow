@@ -1,6 +1,5 @@
 """把声学说话人、跨镜头人脸和原声 ASD 证据关联起来；分数不是准确率。"""
 
-import argparse
 import json
 import math
 import re
@@ -9,6 +8,8 @@ import unicodedata
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
+
+from stages.speakers.utils import write_json
 
 SPEAKER_TURN_MERGE_POLICY = "continuous_same_speaker_v2"
 VISUAL_BINDING_POLICY = "word_anchored_visual_v7_primary_turns"
@@ -23,12 +24,6 @@ def pure_vocalization(text):
     compact = "".join(character for character in unicodedata.normalize("NFKC", text).casefold()
                       if character.isalnum())
     return bool(NONLINGUISTIC_CALL.fullmatch(compact))
-
-
-def write_json(path, value):
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(path)
 
 
 def identity_map(identity):
@@ -455,37 +450,22 @@ def build_plan(vision, identity, audio_candidates, mode="speaker_visual", merge_
     return merge_speaker_turns(plan, merge_gap, merge_duration) if merge_turns else plan
 
 
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--vision", required=True)
-    parser.add_argument("--identity", required=True)
-    parser.add_argument("--audio", action="append", required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--mode", choices=("speaker_visual",), default="speaker_visual")
-    parser.add_argument("--merge-speaker-turns", action="store_true")
-    parser.add_argument("--speaker-turn-max-gap-seconds", type=float, default=.8)
-    parser.add_argument("--speaker-turn-max-seconds", type=float, default=15.)
-    parser.add_argument("--overwrite", action="store_true", help="Explicitly replace this generated plan")
-    args = parser.parse_args()
-    output = Path(args.output)
-    if output.exists() and not args.overwrite:
+def run_stage(*, vision, identity, audio, output, mode="speaker_visual", merge_speaker_turns=False,
+              speaker_turn_max_gap_seconds=.8, speaker_turn_max_seconds=15., overwrite=False):
+    output = Path(output)
+    if output.exists() and not overwrite:
         raise FileExistsError(output)
     candidates = []
-    for path in args.audio:
-        audio = json.loads(Path(path).read_text())
-        audio["_result_path"] = str(Path(path).resolve())
-        candidates.append(audio)
+    for path in audio:
+        candidate = json.loads(Path(path).read_text())
+        candidate["_result_path"] = str(Path(path).resolve())
+        candidates.append(candidate)
     if len({audio.get("audio_sha256") for audio in candidates}) > 1:
         raise ValueError("Audio candidates must analyze the same waveform")
-    plan = build_plan(json.loads(Path(args.vision).read_text()), json.loads(Path(args.identity).read_text()), candidates, args.mode,
-                      args.merge_speaker_turns, args.speaker_turn_max_gap_seconds, args.speaker_turn_max_seconds)
+    plan = build_plan(json.loads(Path(vision).read_text()), json.loads(Path(identity).read_text()), candidates, mode,
+                      merge_speaker_turns, speaker_turn_max_gap_seconds, speaker_turn_max_seconds)
     write_json(output, plan)
     summary = {"selected_audio_backend": plan["selected_audio_backend"],
                "utterances": [{key: item[key] for key in ("id", "start", "end", "text", "speaker_id", "person_id", "face_detection_frame_coverage")} for item in plan["utterances"]]}
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-
-
-if __name__ == "__main__":
-    main()
-
+    return plan

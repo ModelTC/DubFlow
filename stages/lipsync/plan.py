@@ -1,6 +1,5 @@
 """用保留下来的对白 ID 直接规划口型，不重新 ASR 或做跨语言语义匹配。"""
 
-import argparse
 import json
 import math
 import wave
@@ -151,12 +150,12 @@ def continuous_visual_jobs(jobs, source, accepted):
     return result
 
 
-def build_plan(args):
-    source_path, dialogue_path = Path(args.plan).resolve(), Path(args.dialogue).resolve()
+def run_stage(*, plan, dialogue, audio_manifest, output_dir, context_seconds=.7, edit_context_seconds=.6):
+    source_path, dialogue_path, audio_path = Path(plan), Path(dialogue), Path(audio_manifest)
     source, dialogue = json.loads(source_path.read_text()), json.loads(dialogue_path.read_text())
     if Path(dialogue["source_plan"]).resolve() != source_path:
         raise ValueError("Translated dialogue belongs to another source plan")
-    output = Path(args.output_dir).resolve()
+    output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     plan_path = output / "render_plan.json"
     if plan_path.exists():
@@ -166,7 +165,7 @@ def build_plan(args):
     if len(translated) != len(dialogue["utterances"]) or set(translated) != set(originals):
         raise ValueError("Translation must preserve every source utterance ID exactly once")
     duration = source["frames"] / source["fps"]
-    audio_manifest = json.loads(Path(args.audio_manifest).read_text())
+    audio_manifest = json.loads(Path(audio_path).read_text())
     accepted = set(audio_manifest["metadata"]["accepted_replacement_ids"])
     skipped = {row["id"]: row["reason"] for row in audio_manifest["metadata"]["skipped_replacements"]}
     gain = audio_manifest["metadata"]["target_speech_gain"]
@@ -187,8 +186,8 @@ def build_plan(args):
             matches.append({"source_index": index, "target_indices": [len(targets)]})
         targets.append({"start": row["start"], "end": row["end"], "text": row["target_text"]})
         selected_rows.append(row)
-    final_audio, speech_path, _ = prepared_audio(args.audio_manifest, dialogue["target_speech_path"], duration)
-    jobs = plan_jobs(source, targets, matches, args.context_seconds, args.edit_context_seconds)
+    final_audio, speech_path, _ = prepared_audio(audio_path, dialogue["target_speech_path"], duration)
+    jobs = plan_jobs(source, targets, matches, context_seconds, edit_context_seconds)
     for job in jobs:
         if translated[job["utterance_id"]].get("audio_only") and job["utterance_id"] in accepted:
             row = translated[job["utterance_id"]]
@@ -225,23 +224,12 @@ def build_plan(args):
         job["drive_audio_path"] = str(path)
     result = {"source_plan": str(source_path), "dialogue": str(dialogue_path),
               "source_video": source["source_video"], "target_video": dialogue["target_speech_path"],
-              "audio_manifest": str(Path(args.audio_manifest).resolve()), "target_audio_path": str(final_audio),
+              "audio_manifest": str(audio_path), "target_audio_path": str(final_audio),
               "speech_drive_source": str(speech_path), "fps": source["fps"], "frames": source["frames"],
-              "matching": {"method": "preserved_utterance_ids", "accepted_replacement_ids": sorted(accepted), "context_seconds": args.context_seconds,
-                           "edit_context_seconds": args.edit_context_seconds,
+              "matching": {"method": "preserved_utterance_ids", "accepted_replacement_ids": sorted(accepted), "context_seconds": context_seconds,
+                           "edit_context_seconds": edit_context_seconds,
                            "visual_window_policy": VISUAL_WINDOW_POLICY,
                            "max_visual_window_seconds": MAX_VISUAL_WINDOW_SECONDS}, "jobs": jobs}
     with plan_path.open("x") as handle:
         json.dump(result, handle, ensure_ascii=False, indent=2)
     print(f"Direct ID mapping: {len(originals)} utterances, {len(jobs)} render jobs")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", required=True)
-    parser.add_argument("--dialogue", required=True)
-    parser.add_argument("--audio-manifest", required=True)
-    parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--context-seconds", type=float, default=0.7)
-    parser.add_argument("--edit-context-seconds", type=float, default=0.6)
-    build_plan(parser.parse_args())

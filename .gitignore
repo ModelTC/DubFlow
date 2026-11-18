@@ -62,7 +62,11 @@ __pycache__/
 
 # Public README artwork only; private media stays ignored.
 !/docs/assets/lightdubber-logo.png
+!/docs/assets/lightdubber-logo-v2.png
 !/docs/assets/lightdubber-pipeline.png
+!/docs/assets/lightdubber-pipeline-v2.png
+!/docs/assets/lightdubber-logo-v3-dark.png
+!/docs/assets/lightdubber-logo-v3.png
 
 # Credentials belong in local auth tools, never in this repository.
 .env

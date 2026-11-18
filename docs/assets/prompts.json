@@ -13,6 +13,100 @@
       "edit_prompt": "Use case: compositing.\nAsset type: LightDubber GitHub README workflow infographic.\nInput image 1 is the exact edit target: existing workflow diagram. Input image 2 is the approved new LightDubber brand logo (LD monogram with waveform + green-to-mint gradient wordmark).\nChange ONLY the top-left branding: replace the large plain \"LightDubber\" title and the vertical green decorative bar immediately to its left with the approved icon-and-wordmark lockup from image 2. Fit this lockup neatly in the existing upper-left header region above the subtitle, with the LD symbol to the left of the gradient \"LightDubber\" wordmark. Keep the exact text \"LightDubber\" once in the header, with its gradient colors and icon shape matching image 2. Preserve the subtitle \"Video translation, from speech to screen\" in place. Keep every other part of image 1 unchanged: dimensions, off-white background, all five numbered stages, all existing English text, all icons, arrows, LightLLM and LightX2V services, background-audio bypass and footer. Do not add any labels or alter the workflow. Crisp legible typography, no clipping, no watermark.",
       "prompt": "Use case: infographic-diagram.\nAsset type: polished GitHub README architecture / workflow illustration for LightDubber. Create a precise, beautiful, legible technical infographic, landscape about 2:1, generous yet efficient whitespace, warm off-white background #f6f6f0, forest green #234c41, dark ink #162c2f, pale mint #c4e8d6. Flat vector-like finish, fine connectors, tasteful rounded panels, a premium open-source research-project aesthetic. Not a screenshot, not a dashboard, no photos, no neon, no tiny text, no watermark.\nHeader: left aligned LD monogram with waveform beside the green-to-mint gradient wordmark \"LightDubber\" and below it \"Video translation, from speech to screen\". Small top-right text \"HIGH-LEVEL WORKFLOW\".\nMain layout: a single horizontal row of FIVE equally sized numbered cards, clear arrows only from left to right. Exactly these titles and short secondary labels:\n01 \"Understand\" / \"Words, timing, speakers\" / \"ASR + Alignment\"\n02 \"Separate\" / \"Dialogue + background\" / \"Audio Separation\"\n03 \"Translate & voice\" / \"Target-language speech\" / \"TTS\"\n04 \"Lip-sync\" / \"Speaker-bound mouth edits\"\n05 \"Compose\" / \"Paste back, mix, retime\"\nAdd one restrained line icon per card: waveform with timing marks, split waveform, two speech bubbles, face outline with mouth, video timeline. Number badges clear.\nAbove the first card place a small video-frame icon and the label \"Source video\", connected DOWN to 01. Above the last card place a matching video-frame icon and the label \"Dubbed video\", connected UP from 05. No invented faces or sample data needed.\nBelow card 03, a separate outlined service pill reading \"LightLLM\" with secondary line \"LLM\". Connect ONLY this pill to card 03 with a short dashed two-way arrow. Below card 04 a matching service pill \"LightX2V\" with secondary line \"Lip-sync Model\", connected ONLY to 04 by short dashed two-way arrow. Add small legend \"Dashed links: independent model services\".\nDraw one thin MINT background-audio bypass line from card 02, running below the service-pill area, ending in an upward arrow into card 05. Label this line clearly \"Original background audio\"; it must NOT feed the translation or lip-sync service boxes.\nBottom left a modest note \"CLI + Web UI\", bottom right \"Speaker-aware • Modular • Self-hosted\".\nAll text exact, correct English, readable at README display width. Make typography polished, uniform and not crowded. Logical connections are more important than decoration.",
       "layout_edit_prompt": "Use case: precise-object-edit.\nAsset type: existing LightDubber README workflow infographic.\nEdit ONLY the top-left LD icon + LightDubber gradient wordmark lockup. It is currently crowded against the top edge and subtitle. Scale that whole logo lockup down uniformly to about 65% of its current width and height, preserving its icon, typography, spelling and green-to-mint gradient. Position the smaller lockup with its left edge aligned to the subtitle's left edge, around x=80 pixels on this 1754-pixel-wide image, top around y=25 pixels; keep its bottom above y=75 pixels, so there is a clear gap before the subtitle. Fill the cleared area seamlessly with the existing off-white background. Preserve the subtitle \"Video translation, from speech to screen\" in its EXACT current position, size and wording. Preserve all other image content and dimensions exactly: top-right heading, five stages, cards, icons, all English labels, service pills, arrows, background-audio route and footer. Do not enlarge or move the rest of the diagram, no other changes."
+    },
+    {
+      "file": "lightdubber-logo-v2.png",
+      "tool": "built-in image_gen",
+      "transparent_background": true,
+      "prompt": "Use case: logo-brand.\nAsset type: polished alternative horizontal logo for the open-source video translation and voice dubbing project LightDubber, a GitHub README masthead and web product brand.\nPrimary request: create one distinctive new logo inspired by the expressive creative-tool illustration and strong typography visible in the AutoFigure reference, while giving LightDubber its own voice-and-light identity.\nImage 1 is STYLE REFERENCE ONLY: take the tasteful flat illustrative finish, limited warm/cool contrast, graceful flowing strokes, and integration of a profession-specific tool with the typography. Do not reproduce the paintbrush, splash silhouette, text, or exact arrangement.\nImage 2 is BRAND CONTEXT ONLY: preserve the exact brand name LightDubber and green-to-jade gradient direction; do not reproduce the old LD badge or its bulky rounded type.\nDesign: a single elegant compact upright studio microphone on the LEFT of the wordmark. Its grille suggests a clean audio waveform; a few broad flowing emerald, jade and warm golden-amber ribbons rise from its top like sound becoming light, subtly bending toward the text. These are controlled, fluid graphic strokes, not chaotic paint splatters. Include only a few small gold light accents. The microphone silhouette must remain clear and ownable, with enough simplicity to extract as an app icon. No paintbrush, generic robot, globe, headphones, letters LD, or extra surrounding badges. Let the microphone/ribbons rise a little above the capital letters, but keep the total emblem height no more than 1.6 times the wordmark height.\nText (verbatim): \"LightDubber\" exactly once, spelled L i g h t D u b b e r, one continuous word, capital L and D. Large refined bold modern humanist sans-serif with carefully balanced kerning, gently rounded details but no bubble-like children's lettering. Use a visible smooth gradient from deep forest green in Light toward rich jade green in Dubber; maintain strong contrast on white. The wordmark occupies about 75 percent of the horizontal composition, the emblem about 20 percent with an intentional gap.\nComposition: wide landscape horizontal lockup, complete unclipped design centered with modest clean safety margins, no excessive empty canvas. One logo only, no alternate versions or presentation board.\nStyle/medium: crisp professional vector-like raster illustration, mostly flat colors, subtle restrained gradients on the lettering and microphone, precise contours, no photo textures, no 3D embossing, no drop shadow, no neon glow, no slogans, no decorative captions, no watermark.\nBackground: genuine fully transparent alpha, not white painted into the image and not a drawn checkerboard.",
+      "reference_images": [
+        {
+          "role": "style reference",
+          "source": "https://github.com/ResearAI/AutoFigure/blob/main/img/logo.png"
+        },
+        {
+          "role": "brand context",
+          "source": "docs/assets/lightdubber-logo.png"
+        }
+      ]
+    },
+    {
+      "file": "lightdubber-logo-v3.png",
+      "tool": "built-in image_gen",
+      "transparent_background": true,
+      "prompt": "Use case: logo-brand.\nAsset type: final horizontal logo for LightDubber, an open-source video translation, voice dubbing and lip-sync framework, used as a GitHub README masthead.\nInput images: Image 1 is the EXISTING LightDubber logo to redesign. Image 2 (Supabase) is a palette/restraint reference only. Image 3 (LangGraph) is a compact icon-to-wordmark proportion reference only. Do NOT reproduce their lightning bolt, bracket icon, lettering or brand names.\n\nPrimary request: elevate the existing LightDubber logo into an elegant, distinctive, entirely GREEN identity. Preserve the exact name and the idea of sound becoming dialogue, but dramatically simplify the old microphone, remove all gold ribbons, stars, floating flourishes, metallic effects and tiny details.\nDesign a single compact original emblem to the LEFT: a softly squared speech-bubble silhouette with a small carefully cut tail, a subtle overlapping echo edge, and three or five short rounded vertical waveform bars in its open interior. The emblem should feel like a clean fusion of audio waveform and dialogue, rather than a generic chat app. Strong silhouette, thoughtful negative space, consistent rounded geometry. No microphone stand. No literal letters LD. No enclosing presentation tile around the whole logo.\nTypography: exact text \"LightDubber\" once, spelled L i g h t D u b b e r. Beautiful medium-bold contemporary humanist/grotesk sans-serif, balanced optical kerning, clean open counters, carefully designed capital L and D, not cartoonishly rounded or overly heavy. Smooth restrained LEFT-to-RIGHT GREEN gradient across the whole word from rich forest green #185B3B through emerald #20885A to jade #36AE78. Rightmost letters must remain saturated and legible, never washed-out pale mint.\nPalette: forest green #103E2D, emerald #20A66A, jade #36AE78, tiny mint accents #BDEBD2. Absolutely no gold, yellow, orange, blue, purple, black lettering, glow or texture. The emblem may use only two restrained green tones plus transparent negative-space waveform.\nComposition: one elegant horizontal lockup on a genuinely transparent background. Symbol height about 1.15 times capital letter height; readable wordmark occupies 78–82% of logo width. Moderate gap between icon and type, balanced baseline, generous but NOT huge safety margin. No subtitle, slogan, samples or variants. Wide landscape, close to 3:1 overall canvas with the logo centered and generous vertical breathing room, all artwork completely inside the frame.\nFinish: crisp, precise, flat vector-like raster with flawless smooth alpha edges, no speckled pixels, no 3D, no bevel, no shadows, no white rectangle, no checkerboard printed in the image. Production-ready branding, clean enough to recognize at small sizes.",
+      "reference_images": [
+        {
+          "role": "edit target",
+          "source": "docs/assets/lightdubber-logo-v2.png"
+        },
+        {
+          "role": "palette and restraint",
+          "source": "https://github.com/supabase/supabase"
+        },
+        {
+          "role": "compact logo proportions",
+          "source": "https://github.com/langchain-ai/langgraph"
+        }
+      ]
+    },
+    {
+      "file": "lightdubber-logo-v3-dark.png",
+      "tool": "built-in image_gen",
+      "transparent_background": true,
+      "prompt": "Use case: precise-object-edit.\nAsset type: DARK-MODE companion of the supplied LightDubber transparent logo.\nThe input image is the exact approved edit target. Change ONLY its GREEN color values to make this same logo highly legible against dark GitHub backgrounds such as #0D1117. Preserve the original exact dimensions, symbol geometry, letter shapes, kerning, positions, relative sizes, silhouette, transparency, and all negative spaces. Do not redraw or move any part.\nRecolor the wordmark \"LightDubber\" to a restrained luminous-but-flat GREEN gradient from soft mint-green #91E3B4 at the left to emerald-green #4ACC8A at the right. Recolor the speech-bubble foreground to rich bright emerald #2DB87A and its offset back/echo layer to mint #83DFB0. Keep the waveform cutouts genuinely transparent. No white lettering, blue, yellow, gold, shadows, glow, outlines, bevels, texture or other new effects.\nThe exact word LightDubber appears once. Output genuine transparent alpha with clean smooth edges; DO NOT bake in the dark background. This is strictly a recolor of the existing composition, not a new logo design.",
+      "reference_images": [
+        {
+          "role": "edit target",
+          "source": "docs/assets/lightdubber-logo-v3.png"
+        }
+      ]
+    },
+    {
+      "file": "lightdubber-pipeline-v2.png",
+      "tool": "built-in image_gen",
+      "transparent_background": false,
+      "prompt": "Use case: infographic-diagram.\nAsset type: final premium GitHub README architecture/workflow figure for LightDubber.\nInput image 1 is the OLD LightDubber workflow to redesign completely while preserving its real pipeline meaning.\nInput image 2 is the NEW approved GREEN LightDubber speech-wave logo: reproduce this exact emblem and wordmark neatly in the header.\nInput image 3 is a layout reference ONLY: borrow its aligned modules, disciplined spacing and orthogonal connections, not its black background, product names or topology.\n\nCreate one exceptionally clear, elegant wide landscape technical illustration, approximately 2:1 aspect ratio, high resolution. Pale near-white green background #F5FAF7, forest-green typography #103E2D, restrained emerald accents #20A66A, very pale mint fills #E7F5ED and delicate green-gray borders #BCD7C8. All visual hues belong to green or green-tinted neutrals. Crisp typography, generous negative space, consistent small corner radius and line weight. Flat professional developer-tool editorial design. NO gradients on the diagram cards, NO heavy dark header bars, NO hand-drawn sketching, NO 3D, NO glow, NO texture, NO shadows, NO decorative stars.\n\nHeader: small new logo from image 2 at upper LEFT with generous 40+ pixel margins. Keep logo compact, no more than 20% of canvas width, comfortably separated from the title below. Exact title \"Video translation, from speech to screen\". At upper right a small label \"LIGHTDUBBER WORKFLOW\".\nThe key redesign: SIX equal-sized airy cards in ONE horizontal row. Separate translation and voice synthesis into two steps so their independent backends are clear. Each card uses a small mint step number near its upper left, a bold concise title, one simple green line icon, and short supporting text. Exact card content:\n01 title \"Understand\"; two supporting lines \"ASR + Alignment\" and \"Speaker binding\"; icon waveform with timing dots.\n02 title \"Separate\"; two supporting lines \"Dialogue\" and \"Background audio\"; icon two gently splitting waveform tracks.\n03 title \"Translate\"; support \"Target-language text\"; icon two small speech bubbles with simple horizontal lines, NO invented language letters.\n04 title \"Voice\"; support \"Target-language speech\"; icon simple compact microphone/wave.\n05 title \"Lip-sync\"; support \"Speaker-bound edits\"; icon minimal mouth inside a small face crop frame, no detailed human face.\n06 title \"Compose\"; support \"Mix · Retime · Export\"; icon simple video timeline with two tracks.\n\nMain arrows: thin dark-green horizontal arrows from 01 to 02 to 03 to 04 to 05 to 06, exactly one in each gap, never through text.\nA compact pill ABOVE card 01 says \"Source video\", with a small play-frame icon, and a vertical arrow DOWN into 01.\nA matching pill ABOVE card 06 says \"Dubbed video\", and a vertical arrow UP from 06 into that pill.\n\nSecond row contains EXACTLY THREE compact optional-backend panels, aligned directly below cards 03, 04 and 05. These panels must NOT overlap or touch each other. Each has a short vertical DASHED connector to its corresponding card, indicating interchangeable backend choices, not extra pipeline steps:\nBelow 03: bold small heading \"LLM backend\", next lines \"LightLLM / vLLM\" and \"DeepSeek / GPT API\".\nBelow 04: heading \"TTS backend\", next lines \"Qwen3-TTS\" and \"TTS API\".\nBelow 05: heading \"Lip-sync backend\", next lines \"LightX2V\" and \"TBDub\".\nFor the first two panels, separate local and API alternatives with quiet spacing or subtle divider, not an arrow between choices. Each panel connects ONLY to its own stage. The diagram must not suggest that DeepSeek performs TTS or that Qwen3-TTS performs translation.\n\nBackground bypass: a single emerald line leaves the BOTTOM of card 02, descends BELOW the three backend panels, travels horizontally right, then rises to the BOTTOM of card 06 ending in an UPWARD ARROW. Smooth 90-degree rounded bends. Label its middle \"Preserve original background audio\" in a small white or pale-green pill. This bypass touches no backend panel and does not feed translation or TTS.\n\nAt bottom left put \"Web UI + CLI\". At bottom right add a small simple legend \"Solid: data flow     Dashed: backend choices\". Leave breathing room from the bottom edge.\nText must be exact, professional clean sans-serif, readable when image displayed at 1100px width. Avoid tiny captions and overly verbose text. All six cards and three backend panels must fit fully inside the canvas. Clear logical connectivity takes priority over ornament.",
+      "reference_images": [
+        {
+          "role": "previous workflow",
+          "source": "docs/assets/lightdubber-pipeline.png"
+        },
+        {
+          "role": "new brand",
+          "source": "docs/assets/lightdubber-logo-v3.png"
+        },
+        {
+          "role": "module spacing and connectors",
+          "source": "https://raw.githubusercontent.com/supabase/supabase/master/apps/docs/public/img/supabase-architecture.svg"
+        }
+      ]
     }
-  ]
+  ],
+  "green_brand_refresh": {
+    "palette": {
+      "forest": "#103E2D",
+      "emerald": "#20A66A",
+      "jade": "#36AE78",
+      "mint": "#BDEBD2",
+      "background": "#F5FAF7"
+    },
+    "skill_reference": "https://buildwithclaude.com/skill/ai-image-generation",
+    "skill_source": "https://github.com/its-a-skill-issue/superpowers/blob/main/tools/image/ai-image-generation/SKILL.md",
+    "execution": "built-in image_gen; no external inference service",
+    "design_references": [
+      {
+        "repository": "https://github.com/supabase/supabase",
+        "borrowed": "Restrained emerald accents, whitespace, aligned modules and orthogonal connectors"
+      },
+      {
+        "repository": "https://github.com/langchain-ai/langgraph",
+        "borrowed": "Compact symbol and wordmark proportions; not its blue palette"
+      },
+      {
+        "repository": "https://github.com/astral-sh/uv",
+        "borrowed": "Single accent color and quiet supporting labels; not its purple palette"
+      }
+    ]
+  }
 }

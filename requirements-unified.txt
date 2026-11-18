@@ -54,5 +54,6 @@ ffmpy
 ipython
 importlib-resources
 
-# Local inference-only source packages and SceneDetect use --no-deps.
+# Model implementations live under stages/*/models; no editable upstream packages are needed.
+# SceneDetect is installed with --no-deps.
 # Qwen3-TTS runs separately with Transformers 4.57; the translation service and LightX2V have their own environments.

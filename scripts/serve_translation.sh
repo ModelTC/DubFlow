@@ -24,6 +24,9 @@ GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.75}
 
 case "$TRANSLATION_BACKEND" in
   lightllm)
+    if [[ -x "$ROOT/.venv-lightllm/bin/python" ]]; then
+      LIGHTLLM_PYTHON=${LIGHTLLM_PYTHON:-$ROOT/.venv-lightllm/bin/python}
+    fi
     exec "${LIGHTLLM_PYTHON:-python3}" -m lightllm.server.api_server \
       --model_dir "$MODEL_PATH" --model_name "$MODEL_NAME" \
       --host "$HOST" --port "$PORT" --tp 1 --data_type bfloat16 \

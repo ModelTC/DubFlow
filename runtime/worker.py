@@ -9,9 +9,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 
-import main
+from runtime.pipeline import run as run_pipeline
 
-from runtime.config import load_config
+from runtime.config import ROOT, load_config
 from runtime.processes import Channel, StagePool
 
 
@@ -20,7 +20,7 @@ def run(config_path, gpu):
     config_path = Path(config_path).absolute()
     signature = hashlib.sha256(config_path.read_bytes()).hexdigest()
     config = load_config(config_path)
-    data_dir = Path(os.environ.get("DUB_DATA_DIR", main.ROOT / "outputs/web"))
+    data_dir = Path(os.environ.get("DUB_DATA_DIR", ROOT / "outputs/web"))
     lock_fd = os.environ.get("DUB_WORKER_LOCK_FD")
     descriptors = (int(lock_fd),) if lock_fd is not None else ()
     with redirect_stdout(os.sys.stderr):
@@ -48,7 +48,7 @@ def run(config_path, gpu):
                         gpu=gpu, source_language=request["source_language"], target_language=request["target_language"],
                         duration_mode=request.get("duration_mode", "fixed"), resume=request["resume"], analysis_plan=None,
                         source_audio_manifest=None, dialogue=None, merge_speaker_turns=None)
-                    main.run(arguments, execute=pool.execute)
+                    run_pipeline(arguments, execute=pool.execute)
                     (output / "resident_models.json").write_text(json.dumps(
                         {"gpu": gpu, "engines": pool.snapshot()}, ensure_ascii=False, indent=2) + "\n")
                     result = {"type": "done", "id": request["id"], "ok": True}

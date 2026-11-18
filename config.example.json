@@ -1,7 +1,6 @@
 {
   "python": ".venv/bin/python",
   "models_dir": "models",
-  "s3fd_repo": "third_party/TalkNet-ASD",
   "s3fd_model": "models/talknet/sfd_face.pth",
   "loconet_model": "models/loconet/loconet_unitalk.model",
   "gpu": 6,
@@ -23,6 +22,7 @@
   "diar_model": "models/Nemotron-3-Diarization",
   "identity_model": "models/insightface/buffalo_l",
   "translation_model": "qwen35-dubbing",
+  "translation_options": {},
   "tts_backend": "qwen3tts",
   "tts_model": "models/Qwen3-TTS-12Hz-1.7B-Base",
   "tts_python": ".venv-tts/bin/python",
@@ -34,5 +34,9 @@
   "translation_url": "http://127.0.0.1:18440/v1",
   "tbdub_url": "http://127.0.0.1:18441",
   "landmarker_model": "models/tbdub/face_landmarker.task",
-  "duration_mode": "adaptive_video"
+  "duration_mode": "adaptive_video",
+  "translation_api_key_env": "LIGHTDUBBER_LLM_API_KEY",
+  "tts_url": "",
+  "tts_api_key_env": "LIGHTDUBBER_TTS_API_KEY",
+  "tts_voice": "alloy"
 }

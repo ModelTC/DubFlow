@@ -1,45 +1,20 @@
 """直接用已绑定的 S3FD 框裁剪，复用原生关键点、平滑与贴回。"""
 
-import argparse
-import hashlib
 import json
 import math
 import os
-import subprocess
 import sys
 import time
 from contextlib import nullcontext
 from pathlib import Path
+
+from runtime.utils import write_json
 from types import SimpleNamespace
 
-from runtime.config import ROOT
-from runtime.models import get, is_enabled
-
-
-def load_landmarker(path, options=None):
-    from mediapipe.tasks import python
-    from mediapipe.tasks.python import vision
-
-    path = Path(path).resolve()
-    options = options or vision.FaceLandmarkerOptions(
-        base_options=python.BaseOptions(model_asset_path=str(path), delegate=python.BaseOptions.Delegate.CPU), num_faces=1)
-    return get(("mediapipe_landmarker", str(path), "cpu"), lambda: vision.FaceLandmarker.create_from_options(options))
-
-
-def write_json(path, value):
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(path)
-
-
-def fingerprint(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
-def file_signature(path):
-    path = Path(path).resolve()
-    info = path.stat()
-    return {"path": str(path), "bytes": info.st_size, "mtime_ns": info.st_mtime_ns}
+from runtime.models import is_enabled
+from runtime.execution import call_function
+from stages.lipsync.model import load_landmarker
+from stages.lipsync.utils import fingerprint, file_signature
 
 
 def bound_face_box(record, width, height):
@@ -76,7 +51,7 @@ def track_boxes(anchors, width, height):
     return boxes
 
 
-def track_bbox_worker(args, job):
+def track_bbox_worker(video, job, report_path):
     import cv2
     import numpy as np
 
@@ -91,7 +66,7 @@ def track_bbox_worker(args, job):
         "frames": job["end_frame"] - job["start_frame"], "decoded_frames": 0,
         "frame_diagnostics": [],
     }
-    capture = cv2.VideoCapture(args.video)
+    capture = cv2.VideoCapture(video)
     try:
         fps = float(capture.get(cv2.CAP_PROP_FPS))
         if not np.isfinite(fps) or fps <= 0:
@@ -125,14 +100,15 @@ def track_bbox_worker(args, job):
     finally:
         capture.release()
         report["preprocessing_seconds"] = time.perf_counter() - started
-        write_json(Path(args.report), report)
+        write_json(report_path, report)
     return report
 
 
-def worker(args):
-    job = json.loads(Path(args.job).read_text())
+def run_worker(*, video, job, report, landmarker):
+    report_path = Path(report)
+    job = json.loads(Path(job).read_text())
     if job.get("roi_mode", "landmarks") == "track_bbox":
-        return track_bbox_worker(args, job)
+        return track_bbox_worker(video, job, report_path)
     import cv2
     import mediapipe as mp
     import numpy as np
@@ -143,14 +119,14 @@ def worker(args):
     started = time.perf_counter()
     report = {
         "backend": "bound_s3fd_bbox_mediapipe_landmarker", "bbox_source": "bound_s3fd_track",
-        "version": mp.__version__, "delegate": "CPU", "model_path": str(Path(args.landmarker).resolve()),
+        "version": mp.__version__, "delegate": "CPU", "model_path": str(Path(landmarker).resolve()),
         "detector_model_loaded": False, "provided_bbox_frames": len(anchors),
         "observed_bbox_frames": sum(record["observed"] for record in anchors),
         "request_signature": job.get("roi_cache_signature"),
         "frames": job["end_frame"] - job["start_frame"], "decoded_frames": 0,
         "confidence_thresholds": {"presence": 0.5, "tracking": 0.5}, "frame_diagnostics": [],
     }
-    capture = cv2.VideoCapture(args.video)
+    capture = cv2.VideoCapture(video)
     try:
         fps = float(capture.get(cv2.CAP_PROP_FPS))
         if not np.isfinite(fps) or fps <= 0:
@@ -160,7 +136,7 @@ def worker(args):
             raise ValueError("Bound face track does not cover the model window")
         capture.set(cv2.CAP_PROP_POS_FRAMES, job["start_frame"])
         landmark_started = time.perf_counter()
-        landmark_model = load_landmarker(args.landmarker)
+        landmark_model = load_landmarker(landmarker)
         landmarks = []
         size = None
         # IMAGE 模式没有跨视频时间状态；常驻模型只在进程退出时关闭。
@@ -201,7 +177,7 @@ def worker(args):
                                                     "frame_diagnostics", "landmark_seconds")}
             attempt.update(reason="no_landmarks" if not report["landmark_frames"] else "landmark_gap_exceeds_limit",
                            max_gap_frames=max_gap)
-            report = track_bbox_worker(args, job)
+            report = track_bbox_worker(video, job, report_path)
             report["landmark_fallback"] = attempt
         else:
             points, interpolated = native.fill_short_gaps(landmarks, max_gap_frames=max_gap)
@@ -214,28 +190,14 @@ def worker(args):
     finally:
         capture.release()
         report["preprocessing_seconds"] = time.perf_counter() - started
-        write_json(Path(args.report), report)
+        write_json(report_path, report)
     return report
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan")
-    parser.add_argument("--output")
-    parser.add_argument("--worker", action="store_true")
-    parser.add_argument("--video")
-    parser.add_argument("--job")
-    parser.add_argument("--report")
-    parser.add_argument("--landmarker", required=True)
-    args = parser.parse_args()
-    if args.worker:
-        worker(args)
-        return
-    if not args.plan or not args.output:
-        parser.error("--plan and --output are required")
-    output = Path(args.output).resolve()
-    plan = json.loads(Path(args.plan).read_text())
-    landmarker = Path(args.landmarker).resolve()
+def run_stage(*, plan, output, landmarker):
+    output = Path(output)
+    plan = json.loads(Path(plan).read_text())
+    landmarker = Path(landmarker)
     needs_landmarker = any(job["action"] == "tbdub" and job.get("roi_mode", "landmarks") == "landmarks"
                            for job in plan["jobs"])
     if needs_landmarker and not landmarker.is_file():
@@ -260,16 +222,15 @@ def main():
         report = json.loads(report_path.read_text()) if report_path.is_file() else None
         if report is None or report.get("request_signature") != job_signature or not report["success"]:
             write_json(input_path, {**job, "roi_cache_signature": job_signature})
-            command = ["--worker",
-                       "--video", plan["source_video"], "--job", str(input_path), "--report", str(report_path),
-                       "--landmarker", str(landmarker)]
+            parameters = dict(video=plan["source_video"], job=str(input_path),
+                              report=str(report_path), landmarker=str(landmarker))
             with (directory / f"{job['id']}.log").open("a") as log:
                 if is_enabled():
-                    worker(SimpleNamespace(video=plan["source_video"], job=str(input_path),
-                                           report=str(report_path), landmarker=str(landmarker)))
+                    run_worker(**parameters)
                 else:
-                    subprocess.run([sys.executable, "-m", "stages.lipsync.crop", *command],
-                                   cwd=ROOT, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""}, stdout=log, stderr=subprocess.STDOUT)
+                    result = call_function(sys.executable, "stages.lipsync.crop", "run_worker", parameters,
+                                           capture=True, check=False, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+                    log.write((result.stdout or "") + (result.stderr or ""))
         if not report_path.exists():
             raise RuntimeError(f"ROI worker failed before writing a report: {job['id']}")
         report = json.loads(report_path.read_text())
@@ -288,7 +249,3 @@ def main():
                               for index, (anchor, box) in enumerate(zip(job["roi_records"], report["bboxes"]))]
     plan["roi_preparation_signature"] = signature
     write_json(output, plan)
-
-
-if __name__ == "__main__":
-    main()
