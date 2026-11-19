@@ -31,12 +31,14 @@ class Translator:
         if self.model not in {item["id"] for item in response.json()["data"]}:
             raise RuntimeError(f"Translation service does not serve {self.model}")
 
-    def __call__(self, prompt):
+    def __call__(self, prompt, *,
+                 system="Translate faithfully. Output only the translated spoken words, without commentary.",
+                 allow_partial=False):
         payload = {
             **self.options,
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "Translate faithfully. Output only the translated spoken words, without commentary."},
+                {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
             "stream": False,
@@ -45,6 +47,8 @@ class Translator:
         response.raise_for_status()
         choice = response.json()["choices"][0]
         text = choice["message"]["content"]
+        if allow_partial and choice["finish_reason"] == "length":
+            return (text or "").strip()
         if choice["finish_reason"] != "stop" or not text or not text.strip():
             raise RuntimeError(f"Translation did not finish: {choice['finish_reason']}")
         return text.strip()

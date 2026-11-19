@@ -24,6 +24,6 @@ if __name__ == "__main__":
     parser.add_argument("--source-language", choices=("auto", *LANGUAGES))
     parser.add_argument("--target-language", choices=tuple(LANGUAGES), required=True,
                         help="必填：输出对白语言")
-    parser.add_argument("--duration-mode", choices=("fixed", "adaptive_video"), default=None,
-                        help="fixed 保持原片时长；adaptive_video 按译音长短调整成片时长")
+    parser.add_argument("--duration-mode", choices=("fixed",), default="fixed",
+                        help="保留原视频时间线（默认）")
     run(parser.parse_args())

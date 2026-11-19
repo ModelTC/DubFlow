@@ -17,7 +17,7 @@ import soundfile as sf
 
 from runtime.clients import Translator
 from stages.speech import run as speech
-from stages.speech.model import APISpeechModel
+from stages.speech.model import APISpeechModel, REVIEW_SYSTEM
 from stages.speech.utils import loudness_references, summarize_timings
 
 
@@ -56,7 +56,7 @@ class SpeechCacheTests(unittest.TestCase):
             tts_backend="qwen3tts", tts_model="fixture", tts_python="unused", tts_voice="alloy",
             qwen_x_vector_only_mode=True, duration_mode="fixed", translation_url="unused",
             translation_model="fixture", translation_backend="openai_compatible",
-            translation_api_key_env="TEST_LLM_KEY", tts_url="", tts_api_key_env="TEST_TTS_KEY",
+            translation_api_key_env="TEST_LLM_KEY", translation_options={}, tts_url="", tts_api_key_env="TEST_TTS_KEY",
         )
         self.record = {
             "id": "u0", "speaker_id": "speaker", "text": "source", "target_text": "same words",
@@ -128,6 +128,18 @@ class SpeechCacheTests(unittest.TestCase):
         self.assertTrue(result["tts_reused"])
         self.assertEqual(len(self.backend.calls), 1)
 
+    def test_identical_float_reference_preserves_header_and_timestamp(self):
+        path = Path(self.references["speaker"]["path"])
+        audio, rate = sf.read(path, dtype="float32")
+        os.utime(path, (100, 100))
+        original = path.read_bytes()
+        speech.write_voice_reference(path, audio, rate)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(path.stat().st_mtime, 100)
+        speech.write_voice_reference(path, audio * .5, rate)
+        updated, _ = sf.read(path, dtype="float32")
+        self.assertTrue(np.array_equal(updated, audio * .5))
+
     def test_changed_conditioning_invalidates_cache(self):
         item = self.initial()
         for number, change in enumerate(("text", "seed", "reference", "speaker", "model", "audio"), 1):
@@ -152,6 +164,95 @@ class SpeechCacheTests(unittest.TestCase):
                 self.assertFalse(result["tts_reused"])
                 self.backend.identity = {"backend": "fixture", "revision": 1}
 
+    def test_pause_borrowing_can_cross_a_cut_but_stops_at_source_voice(self):
+        base = {**self.record, "person_id": "person", "speaker_ids": ["speaker"]}
+        plan = {"fps": 25, "frames": 75,
+                "shots": [{"start_frame": 0, "end_frame": 30}, {"start_frame": 30, "end_frame": 75}],
+                "utterances": [{**base, "start": .8, "end": 1.2},
+                               {**base, "id": "u1", "start": 2., "end": 2.2}]}
+        waveform = np.zeros(3 * 48000, dtype=np.float32)
+        waveform[round(1.45 * 48000):round(1.58 * 48000)] = .08
+        window, following = speech.speaking_windows(plan, waveform)
+        self.assertGreater(window["window_end"], 1.2)
+        self.assertLessEqual(window["window_end"], 1.45)
+        self.assertLessEqual(window["window_end"], following["window_start"])
+        self.assertIs(type(window["window_end"]), float)
+        start, speed = speech.placement({**window, "tts_duration": .70})
+        self.assertLess(start, window["start"])
+        self.assertEqual(speed, 1.)
+        self.assertAlmostEqual(start + .70, window["window_end"])
+
+    def test_overflow_fails_before_extreme_tempo(self):
+        item = self.initial()
+        with self.assertRaisesRegex(RuntimeError, r"1\.10x tempo limit.*u0"):
+            speech.require_duration_fit([item], self.output)
+        report = json.loads((self.output / "incomplete.json").read_text())
+        self.assertEqual(report["stage"], "duration_fit")
+        self.assertGreater(report["missing_dialogue"][0]["required_tempo"], 1.10)
+
+    def test_short_clip_uses_measured_atempo_when_guard_overestimates(self):
+        self.backend.durations["same words"] = .48
+        item = {**self.initial(), "window_end": .51}
+        _, guarded = speech.placement(item)
+        self.assertGreater(guarded, 1.10)
+        speech.require_duration_fit([item], self.output)
+        aligned, waveform = speech.align_record(item, self.output)
+        self.assertLessEqual(aligned["tempo_ratio"], 1.10)
+        self.assertLessEqual(aligned["end"], item["window_end"])
+        self.assertGreater(len(waveform), 0)
+
+    def test_shortening_review_gives_concrete_feedback_without_neighboring_text(self):
+        record = self.initial()
+        other = {**record, "id": "u1", "text": "a different turn"}
+        translator = SimpleNamespace(close=lambda: None)
+        responses = ["wrong facts", "FAIL: keep the event in the past", "brief phrase", "**PASS**"]
+        with patch.object(speech, "Translator", return_value=translator), \
+                patch.object(speech, "ask_translator", side_effect=responses) as respond:
+            item = speech.translate([record], [record, other], self.args, shorten=True, output=self.output)[0]
+        self.assertEqual(item["target_text"], "brief phrase")
+        self.assertEqual(item["translation_review"], "passed")
+        self.assertIn("a different turn", respond.call_args_list[0].args[1])
+        self.assertNotIn("a different turn", respond.call_args_list[1].args[1])
+        self.assertIn("keep the event in the past", respond.call_args_list[2].args[1])
+
+    def test_repeated_translation_gets_one_distinct_paraphrase_prompt(self):
+        item = self.initial()
+        translator = SimpleNamespace(close=lambda: None)
+        responses = ["same words", "brief phrase", "PASS"]
+        with patch.object(speech, "Translator", return_value=translator), \
+                patch.object(speech, "ask_translator", side_effect=responses) as respond:
+            outcome = speech.translate([item], [item], self.args, shorten=True, output=self.output)[0]
+        self.assertEqual(outcome["target_text"], "brief phrase")
+        self.assertIn("different grammatical construction", respond.call_args_list[1].args[1])
+
+    def test_short_speech_resample_recovers_a_natural_take(self):
+        self.record["target_text"] = "what"
+        item = self.initial()
+        self.backend.durations["what"] = .45
+        recovered = speech.resample_short_utterances([item], self.references, self.args, self.output)[0]
+        self.assertEqual(recovered["id"], item["id"])
+        self.assertEqual(recovered["target_text"], item["target_text"])
+        self.assertNotEqual(recovered["tts_seed"], item["tts_seed"])
+        self.assertEqual(speech.placement(recovered)[1], 1.)
+        self.assertTrue(recovered["natural_resample_attempted"])
+        Path(recovered["tts_raw_path"]).write_bytes(b"corrupt")
+        rebuilt = speech.synthesize([recovered], self.references, self.args, self.output)[0]
+        self.assertEqual(rebuilt["tts_seed"], recovered["tts_seed"])
+        self.assertFalse(rebuilt["tts_reused"])
+        self.references["speaker"]["text"] = "changed conditioning"
+        changed = speech.synthesize([rebuilt], self.references, self.args, self.output)[0]
+        self.assertNotIn("natural_resample_attempted", changed)
+
+    def test_shortened_lines_rejected_by_meaning_review_keep_approved_text(self):
+        item = self.initial()
+        review = SimpleNamespace(close=lambda: None)
+        with patch.object(speech, "Translator", return_value=review), \
+                patch.object(speech, "ask_translator", side_effect=["wrong words", "FAIL"]):
+            result = speech.shorten_to_fit([item], self.references, self.args, self.output)[0]
+        self.assertEqual(result["target_text"], "same words")
+        self.assertEqual(result["shortening_stopped_reason"], "meaning_review_rejected")
+        self.assertEqual(len(self.backend.calls), 1)
+
     def test_unchanged_translation_stops_and_resumes(self):
         item = self.initial()
         calls, translate = self.translator(["same words"])
@@ -175,6 +276,7 @@ class SpeechCacheTests(unittest.TestCase):
         self.assertEqual(len(self.backend.calls), 2)
 
     def test_run_revalidates_completed_audio_on_resume(self):
+        self.backend.durations["same words"] = .8
         self.args.output_dir = str(self.output / "speech")
         self.args.plan = str(self.output / "plan.json")
         self.args.speech_source = str(self.output / "source.wav")
@@ -246,8 +348,11 @@ class SpeechAPITests(unittest.TestCase):
                 self.send_response(200)
                 self.end_headers()
                 if self.path.endswith("/chat/completions"):
+                    review = payload["messages"][0]["content"] == REVIEW_SYSTEM
+                    limited = payload["messages"][1]["content"] == "truncated request"
                     self.wfile.write(json.dumps({"choices": [{
-                        "finish_reason": "stop", "message": {"content": "translation"},
+                        "finish_reason": "length" if limited else "stop",
+                        "message": {"content": "PASS" if review else "translation"},
                     }]}).encode())
                 else:
                     self.wfile.write(audio)
@@ -300,6 +405,16 @@ class SpeechAPITests(unittest.TestCase):
         self.assertEqual(self.received[1][2]["voice"], "voice-a")
         self.assertEqual(self.received[1][2]["response_format"], "wav")
 
+    def test_only_review_accepts_an_explicit_verdict_from_truncated_response(self):
+        client = Translator(self.url, "remote-llm", "TEST_LLM_KEY", "openai_compatible")
+        try:
+            with self.assertRaisesRegex(RuntimeError, "did not finish: length"):
+                client("truncated request")
+            result = client("truncated request", system=REVIEW_SYSTEM, allow_partial=True)
+            self.assertEqual(result, "PASS")
+        finally:
+            client.close()
+
     def test_deepseek_thinking_options_are_sent_in_request_body(self):
         options = {"thinking": {"type": "disabled"}, "max_tokens": 2048}
         payload = self.request_translation("deepseek-chat", options=options)
@@ -346,9 +461,11 @@ class SpeechAPITests(unittest.TestCase):
                     patch.object(speech, "voice_references", return_value={"speaker": {"rms": .1}}), \
                     patch.object(speech, "synthesize", side_effect=lambda rows, *args: rows), \
                     patch.object(speech, "shorten_to_fit", side_effect=lambda rows, *args: rows), \
+                    patch.object(speech, "resample_short_utterances", side_effect=lambda rows, *args: rows), \
                     patch.object(speech, "assemble", side_effect=lambda rows, *args: {"utterances": rows}):
                 result = speech.run_stage(**settings)
                 self.assertEqual(result["utterances"][0]["target_text"], "translation")
+                self.assertEqual(result["utterances"][0]["translation_review"], "initial_translation")
                 self.assertEqual(len(self.received), 1)
                 payload = self.received[0][2]
                 self.assertEqual(payload["thinking"], options["thinking"])

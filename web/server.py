@@ -104,7 +104,7 @@ class JobInput(BaseModel):
     source_language: str = Field(default="auto", pattern="^(auto|" + "|".join(SUPPORTED_LANGUAGES) + ")$")
     target_language: str = Field(pattern=LANGUAGE_PATTERN)
     profile: str = Field(default="modern", pattern=r"^modern$")
-    duration_mode: str = Field(default="adaptive_video", pattern=r"^(fixed|adaptive_video)$")
+    duration_mode: str = Field(default="fixed", pattern=r"^fixed$")
 
 
 class Store:
@@ -125,7 +125,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY, owner TEXT NOT NULL, upload_id TEXT UNIQUE NOT NULL,
                     source_language TEXT NOT NULL, target_language TEXT NOT NULL,
-                    duration_mode TEXT NOT NULL DEFAULT 'adaptive_video',
+                    duration_mode TEXT NOT NULL DEFAULT 'fixed',
                     profile TEXT NOT NULL DEFAULT 'modern', assigned_gpu INTEGER,
                     duration REAL NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
                     created_at REAL NOT NULL, updated_at REAL NOT NULL,
@@ -327,6 +327,9 @@ class Worker:
         with self.store.connection(write=True) as db:
             db.execute("UPDATE jobs SET status='failed', error=?, updated_at=? WHERE status IN ('running','queued') AND profile!='modern'",
                        ("旧流程已停用，请重新提交视频", time.time()))
+            db.execute("UPDATE jobs SET status='failed', error=?, updated_at=? "
+                       "WHERE status IN ('running','queued') AND duration_mode!='fixed'",
+                       ("旧版画面变速模式已停用，请重新提交视频", time.time()))
             db.execute("UPDATE jobs SET status='failed', error=?, updated_at=? WHERE status='running' AND recoveries>=1",
                        ("任务多次被服务重启中断，请重新上传", time.time()))
             db.execute("UPDATE jobs SET status='queued', recoveries=recoveries+1, updated_at=? WHERE status='running'", (time.time(),))
@@ -416,7 +419,7 @@ class Worker:
         request = {"type": "run", "id": job_id, "source": str(self.store.upload_path(row["upload_id"])),
                    "source_filename": row["filename"],
                    "output": str(self.store.output(job_id)), "source_language": row["source_language"],
-                   "target_language": row["target_language"], "duration_mode": row["duration_mode"], "resume": True}
+                   "target_language": row["target_language"], "resume": True}
         with self.process_lock:
             if self.stop.is_set() or self.store.job(job_id)["status"] == "canceled":
                 return
@@ -436,9 +439,17 @@ class Worker:
                    and read_json(output / "report.json").get("status") == "complete")
         if not result["ok"]:
             logging.error("Dubbing job %s failed: %s", job_id, result.get("error", ""))
+        error = ""
+        if not success:
+            incomplete = read_json(output / "speech" / "incomplete.json")
+            if incomplete.get("stage") == "duration_fit":
+                count = len(incomplete.get("missing_dialogue", []))
+                error = f"{count} 句译音在语速上限内放不进原时间线。请检查台词或尝试其他目标语种。"
+            else:
+                error = "处理失败，请稍后重试或联系管理员查看任务日志"
         with self.store.connection(write=True) as db:
             db.execute("UPDATE jobs SET status=?, error=?, updated_at=? WHERE id=? AND status='running'",
-                       ("succeeded" if success else "failed", "" if success else "处理失败，请稍后重试或联系管理员查看任务日志", time.time(), job_id))
+                       ("succeeded" if success else "failed", error, time.time(), job_id))
 
     def run(self, gpu):
         log_path = self.settings.data_dir / f"worker_gpu{gpu}.log"
@@ -616,7 +627,7 @@ def create_app(settings=None, start_worker=True):
             else:
                 csrf = row["csrf"]
         profiles = profile_catalog(settings)
-        response = JSONResponse({"csrf_token": csrf, "languages": available_languages(settings), "duration_modes": ["fixed", "adaptive_video"],
+        response = JSONResponse({"csrf_token": csrf, "languages": available_languages(settings), "duration_modes": ["fixed"],
                                  "profiles": profiles, "default_profile": "modern",
                                  "service": worker.status(),
                                  "limits": {"max_upload_bytes": settings.max_upload_bytes, "chunk_bytes": settings.chunk_bytes,
@@ -757,6 +768,10 @@ def create_app(settings=None, start_worker=True):
                       else profile_catalog(settings)[0]["models"])
             public = {key: report[key] for key in ("status", "automatic", "human_review_required", "source_language", "target_language",
                                                    "translation_review", "time_compression_policy", "max_tempo", "delivery_policy", *STATS) if key in report}
+            if timing := report.get("timing_fit"):
+                public["timing_fit"] = {key: timing[key] for key in ("policy", "max_tempo", "max_applied_tempo",
+                                                                    "accelerated_utterances", "borrowed_pause_utterances")
+                                        if key in timing}
             public.update(public_video_result(report, state))
             completeness = public_completeness(report)
             if completeness is not None:

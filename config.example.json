@@ -34,7 +34,7 @@
   "translation_url": "http://127.0.0.1:18440/v1",
   "tbdub_url": "http://127.0.0.1:18441",
   "landmarker_model": "models/tbdub/face_landmarker.task",
-  "duration_mode": "adaptive_video",
+  "duration_mode": "fixed",
   "translation_api_key_env": "LIGHTDUBBER_LLM_API_KEY",
   "tts_url": "",
   "tts_api_key_env": "LIGHTDUBBER_TTS_API_KEY",

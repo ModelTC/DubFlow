@@ -110,20 +110,12 @@ class JobPaths:
         return self.root / "final.mp4"
 
     @property
-    def fixed_video(self):
-        return self.root / "final_fixed.mp4"
-
-    @property
     def compose(self):
         return self.root / "compose.json"
 
     @property
     def comparison(self):
         return self.root / "comparison.mp4"
-
-    @property
-    def adaptation(self):
-        return self.root / "adaptive_duration.json"
 
     @property
     def report(self):

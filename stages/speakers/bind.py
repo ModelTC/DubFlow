@@ -11,8 +11,8 @@ from pathlib import Path
 
 from stages.speakers.utils import write_json
 
-SPEAKER_TURN_MERGE_POLICY = "continuous_same_speaker_v2"
-VISUAL_BINDING_POLICY = "word_anchored_visual_v7_primary_turns"
+SPEAKER_TURN_MERGE_POLICY = "continuous_same_speaker_v3"
+VISUAL_BINDING_POLICY = "word_anchored_visual_v8_acoustic_cross_shot"
 NONLINGUISTIC_CALL = re.compile(
     r"(?:汪{2,}|喵{2,}|咩{2,}|呱{2,}|嘎{2,}|嗷{2,}|哈{2,}|呵{2,}|咳{2,}|"
     r"(?:woof){2,}|(?:meow){2,}|(?:ha){2,}|(?:cough){2,})"
@@ -202,6 +202,32 @@ def sustained_visual_anchor(piece, person, frames, fps):
     return None
 
 
+def bind_cross_shot_turn(turn, shot_intervals, frames, fps, speakers, eligible_people):
+    """Keep the spoken turn whole and select only a supported face identity."""
+    piece = {**turn, "source_asr_text": turn.get("source_asr_text", turn["text"]),
+             "cross_shot_translation_unit": True, "visual_person_id": None,
+             "visual_assignment": "cross_shot_voice_without_reliable_face"}
+    reference = independent_visual_reference(turn, speakers, eligible_people)
+    if reference is not None:
+        person = reference["person_id"]
+        for interval in shot_intervals:
+            anchor = sustained_visual_anchor(interval, person, frames, fps)
+            if anchor is not None:
+                piece.update(visual_person_id=person, visual_assignment="global_voice_local_visual_anchor",
+                             binding_recoveries=[{"reference": reference, "anchor": anchor}])
+                break
+        return piece
+
+    ranked = turn["evidence"]
+    if ranked:
+        top = ranked[0]
+        runner_up = ranked[1]["support"] if len(ranked) > 1 else 0.
+        if (top["frame_coverage"] >= .25 and top["positive_fraction"] >= .6 and
+                top["support"] - runner_up >= .25 and top["support"] >= 2 * runner_up):
+            piece.update(visual_person_id=top["person_id"], visual_assignment="cross_shot_dominant_face")
+    return piece
+
+
 def visual_speech_turns(turns, frames, shots, fps, speakers, eligible_people):
     """A voice cluster may belong to several on-screen characters; bind locally."""
     result = []
@@ -211,6 +237,13 @@ def visual_speech_turns(turns, frames, shots, fps, speakers, eligible_people):
                 any(word.get("start") is None or word.get("end") is None for word in words)):
             result.append({**turn, "source_asr_text": turn.get("source_asr_text", turn["text"]),
                            "visual_person_id": None, "visual_assignment": "unresolved_word_or_speaker_evidence"})
+            continue
+        shot_intervals = [{"start": max(turn["start"], shot["start_frame"] / fps),
+                           "end": min(turn["end"], shot["end_frame"] / fps)}
+                          for shot in shots if max(turn["start"], shot["start_frame"] / fps)
+                          < min(turn["end"], shot["end_frame"] / fps)]
+        if len(shot_intervals) > 1:
+            result.append(bind_cross_shot_turn(turn, shot_intervals, frames, fps, speakers, eligible_people))
             continue
         groups = []
         current_person = None
@@ -334,12 +367,13 @@ def merge_speaker_turns(plan, max_gap=.8, max_duration=15.):
         same_shot = previous and shot_id is not None and shot(previous[-1]) == shot_id
         known_voices = set().union(*(acoustic_ids(part) for part in previous)) if previous else set()
         incoming_voices = acoustic_ids(row)
+        compatible_voice = (len(known_voices) <= 1 and
+                            (not known_voices or not incoming_voices or known_voices == incoming_voices))
         cross_shot_continuation = (previous and not same_shot and bound_visual(previous[-1]) and
-                                   bound_visual(row) and len(known_voices) <= 1 and
-                                   (not known_voices or not incoming_voices or known_voices == incoming_voices) and
+                                   bound_visual(row) and
                                    not re.search(r"[。！？.!?][\"'”’）)]*\s*$", previous[-1]["text"]))
         if (previous and key is not None and speaker(previous[-1]) == key and
-                (same_shot or cross_shot_continuation) and
+                compatible_voice and (same_shot or cross_shot_continuation) and
                 row["id"] not in overlapping and previous[-1]["id"] not in overlapping and
                 0 <= row["start"] - previous[-1]["end"] <= max_gap + 1e-9 and
                 row["end"] - previous[0]["start"] <= max_duration + 1e-9):
@@ -415,6 +449,8 @@ def build_plan(vision, identity, audio_candidates, mode="speaker_visual", merge_
         row = utterances[-1]
         if "binding_recoveries" in turn:
             row["binding_recoveries"] = turn["binding_recoveries"]
+        if turn.get("cross_shot_translation_unit"):
+            row.update(cross_shot_translation_unit=True, acoustic_identity_confirmed=len(speakers) == 1)
         row.update(acoustic_speaker_id=speaker, acoustic_speaker_ids=list(speakers))
         if person is not None and len(speakers) <= 1:
             visual_speaker = f"visual__{person}"

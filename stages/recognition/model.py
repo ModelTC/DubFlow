@@ -5,10 +5,11 @@ from pathlib import Path
 from runtime.models import get
 from runtime.languages import LANGUAGES
 
+from stages.recognition.alignment import repair_word_times
 from stages.recognition.utils import (
     ASR_POLICY, OVERLAP_SECONDS, SAMPLE_RATE, WINDOW_SECONDS,
     alignment_quality, anchored_words, detected_language, dominant_language,
-    merge_window_words, punctuated_words, read_mono, release, sentence_segments,
+    merge_window_words, read_mono, release, sentence_segments,
     transcript_language, transcription_windows,
 )
 
@@ -95,7 +96,7 @@ def recognize_qwen3(model, processor, clip, language):
         raise RuntimeError("Qwen3-ASR reached its output limit; refusing a truncated transcript")
     return processor.decode(generated, return_format="parsed")[0]
 
-def transcribe_qwen3(path, *, asr_model, align_model, language, device="cuda:0"):
+def transcribe_qwen3(path, *, asr_model, align_model, language, device="cuda:0", turns=()):
     import torch
 
     waveform = read_mono(path)
@@ -136,16 +137,17 @@ def transcribe_qwen3(path, *, asr_model, align_model, language, device="cuda:0")
                 diagnostic = {**region, "text": transcript, "raw_time_origin_seconds": region["start"],
                               "primary_raw_words": raw, "quality": quality, "backend": "qwen3_forced_aligner",
                               "detected_language": clip_language}
-                words = punctuated_words(raw, transcript)
-                clip_duration = len(clip) / SAMPLE_RATE
-                absolute = []
-                for word in words:
-                    if not 0 <= word["start"] <= word["end"] <= clip_duration + .08:
-                        raise ValueError("Forced-alignment word timestamp is outside the source audio")
-                    absolute.append({**word, "start": min(word["start"], clip_duration) + region["start"],
-                                     "end": min(word["end"], clip_duration) + region["start"]})
+                offset = region["start"]
+                clock = [{**turn, "start": turn["start"] - offset, "end": turn["end"] - offset}
+                         for turn in turns if turn["end"] > offset and turn["start"] < region["end"]]
+                words, repairs = repair_word_times(raw, transcript, clip, clip_language, aligner.align, clock)
+                absolute = [{**word, "start": word["start"] + offset, "end": word["end"] + offset}
+                            for word in words]
+                for word in absolute:
+                    if "alignment_repair" in word:
+                        word["alignment_repair"] = [offset, word["alignment_repair"]]
                 words = anchored_words(absolute, transcript)
-                alignment_windows.append({**diagnostic, "final_words": words})
+                alignment_windows.append({**diagnostic, "timestamp_repairs": repairs, "final_words": words})
                 if region["start"] < previous_end:
                     merged, method = merge_window_words(merged, words, region["start"], previous_end)
                     joins.append({"start": region["start"], "end": previous_end, "method": method})

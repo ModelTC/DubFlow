@@ -13,7 +13,7 @@ const stageGroups = [
   ["render", "compose", "compose_audio_only"],
   ["adaptive_duration", "report"],
 ];
-const state = { csrf: "", limits: null, service: null, profiles: [], durationModes: ["fixed"], profileSelected: false, file: null, duration: 0, previewURL: "", jobs: [], selectedId: "", uploading: false, canceledUpload: false, uploadId: "", uploadXhr: null, resultKey: "", resultMode: "final", toastTimer: null, pollTimer: null, ready: false, refreshing: false };
+const state = { csrf: "", limits: null, service: null, profiles: [], profileSelected: false, file: null, duration: 0, previewURL: "", jobs: [], selectedId: "", uploading: false, canceledUpload: false, uploadId: "", uploadXhr: null, resultKey: "", resultMode: "final", toastTimer: null, pollTimer: null, ready: false, refreshing: false };
 
 function jobStatusName(job) {
   if (job.status !== "succeeded") return statusNames[job.status];
@@ -32,16 +32,8 @@ function renderProfile() {
     item.append(stage, model.name);
     return item;
   }));
-  $("profileHint").textContent = profile && !profile.available ? profile.reason : "Qwen 识别并对齐完整音频；SAM-Audio Large-TV 分离对白与背景；翻译服务生成译文，Qwen TTS 配音，LightX2V TBDub Student 编辑口型。没有可绑定的嘴部时只替换译音，模型执行异常则报错，不将失败当作成功。不做反复内容核验；识别可能漏句，背景可能残留原对白。";
+  $("profileHint").textContent = profile && !profile.available ? profile.reason : "Qwen 识别并对齐完整音频；SAM-Audio Large-TV 分离对白与背景；翻译服务生成译文，Qwen TTS 配音，LightX2V TBDub Student 编辑口型。没有可绑定的嘴部时只替换译音，模型执行异常则报错，不将失败当作成功。改译会检查语义；识别可能漏句，背景可能残留原对白。";
   $("profileHint").classList.toggle("unavailable", Boolean(profile && !profile.available));
-}
-
-function renderDuration() {
-  $("durationHint").textContent = !state.durationModes.includes("adaptive_video")
-    ? "当前服务尚未更新，暂只支持保留原片时长。"
-    : $("durationMode").checked
-    ? "开启：根据译音长短局部调整画面时长。成片可能变长或变短，运动和背景音节奏可能变化。"
-    : "关闭：保留原片时长；译音过长时先缩译，仍放不下则调速。";
 }
 
 function sourceLanguageName(job) {
@@ -112,7 +104,7 @@ function updateForm() {
   $("submitButton").querySelector(".button-spinner").hidden = !state.uploading;
   $("submitButton").querySelector(".submit-arrow").hidden = state.uploading;
   $("submitText").textContent = state.uploading ? "正在提交素材" : state.uploadId ? "继续提交" : "开始翻译";
-  for (const id of ["targetLanguage", "modelProfile", "durationMode", "chooseFile", "replaceFile", "removeFile"]) $(id).disabled = state.uploading || id === "durationMode" && !state.durationModes.includes("adaptive_video");
+  for (const id of ["targetLanguage", "modelProfile", "chooseFile", "replaceFile", "removeFile"]) $(id).disabled = state.uploading;
   $("submitHint").classList.toggle("error", Boolean(tooLong));
   $("submitHint").textContent = !state.ready ? "正在连接本机翻译服务…" : unavailable ? profile?.reason || "模型配置尚未就绪。" : warming ? `模型预热中（${state.service.ready_workers}/${state.service.total_workers}），可以先选择视频。` : tooLong ? `视频超过 ${state.limits.max_duration_seconds} 秒，请先截取需要翻译的部分。` : state.uploading ? "素材分块上传，请保持页面开启。" : state.file ? `提交后分配给空闲显卡，最多 ${state.service.total_workers} 个视频同时处理。` : "选择一个视频，开始你的第一次翻译。";
 }
@@ -304,7 +296,6 @@ async function submit(event) {
     $("cancelUpload").disabled = true;
     submittingJob = true;
     const request = { upload_id: upload.upload_id, source_language: "auto", target_language: $("targetLanguage").value, profile: $("modelProfile").value };
-    if (state.durationModes.includes("adaptive_video")) request.duration_mode = $("durationMode").checked ? "adaptive_video" : "fixed";
     const job = await api("/api/jobs", { method: "POST", body: JSON.stringify(request) });
     submittingJob = false;
     state.uploadId = "";
@@ -423,7 +414,7 @@ function renderResult(job) {
     : completeness ? `${completeness.recognized_dialogue === 0 ? "未检测到可译对白，不代表原片没有对白。" : completeness.unreplaced_ids.length ? "仍有已识别对白未替换，可在报告中查看。" : "已替换全部已识别可译对白。"}音乐、环境声和动物叫声等非对白不翻译。识别仍可能漏检，不能保证绝对无遗漏；请完整预览结果。` : "自动处理结果可能存在漏译、口型或音色偏差。建议下载前完整预览；保留原声的片段可在处理报告中查看。";
   if (job.stats.audio_only || job.stats.partial_lip_edited) $("resultDisclaimer").textContent = "部分或全部对白只替换了音频，未完成对应画面的口型编辑；详见统计和处理报告。 " + $("resultDisclaimer").textContent;
   if (!job.translation_skipped && job.content_verification === "disabled") $("resultDisclaimer").textContent += " 未做 ASR 内容核验和成片语言核验；配音放入时间窗与音轨替换成功不代表台词内容已经验证。背景可能残留原语言对白。";
-  if (!job.translation_skipped && job.duration_mode === "adaptive_video") $("resultDisclaimer").textContent += " 此任务会按译音调整画面时长，局部运动和背景音节奏可能变化；请检查接缝与口型。";
+  if (!job.translation_skipped && job.duration_mode === "adaptive_video") $("resultDisclaimer").textContent += " 这份历史成片使用了画面变速，请检查接缝和背景音。";
   $("resultDownloads").replaceChildren(...[[resultVideo, "下载视频"], ["comparison.mp4", "对比视频"], ["source.txt", "原文"], ["translated.txt", "译文"], ["report.json", "处理报告"]].filter(([file]) => files[file]).map(([file, label], index) => {
     const link = document.createElement("a");
     link.href = files[file];
@@ -473,8 +464,6 @@ async function bootstrap() {
       return option;
     }));
     $("targetLanguage").value = data.languages.some(({ code }) => code === target) ? target : "en";
-    state.durationModes = data.duration_modes || ["fixed"];
-    if (!state.durationModes.includes("adaptive_video")) $("durationMode").checked = false;
     const selected = state.profileSelected ? $("modelProfile").value : data.default_profile;
     $("modelProfile").replaceChildren(...data.profiles.map((profile) => {
       const option = document.createElement("option");
@@ -485,7 +474,6 @@ async function bootstrap() {
     }));
     $("modelProfile").value = selected;
     renderProfile();
-    renderDuration();
     state.ready = true;
     const durationLimit = data.limits.max_duration_seconds > 0 ? `${data.limits.max_duration_seconds} 秒` : "不限制时长";
     $("uploadLimit").textContent = `MP4 / MOV / MKV / WebM · ${formatBytes(data.limits.max_upload_bytes)} · ${durationLimit} · 不预设分辨率上限`;
@@ -512,7 +500,6 @@ $("sourceVideo").addEventListener("loadedmetadata", () => {
 $("sourceVideo").addEventListener("error", () => { if (state.file) $("fileMeta").textContent = `${formatBytes(state.file.size)} · 浏览器无法预览，提交后由服务器检查`; });
 $("targetLanguage").addEventListener("change", updateForm);
 $("modelProfile").addEventListener("change", () => { state.profileSelected = true; renderProfile(); updateForm(); });
-$("durationMode").addEventListener("change", () => { renderDuration(); updateForm(); });
 $("translateForm").addEventListener("submit", submit);
 $("cancelUpload").addEventListener("click", () => { state.canceledUpload = true; state.uploadXhr?.abort(); });
 $("cancelJob").addEventListener("click", async () => {

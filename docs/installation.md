@@ -230,7 +230,6 @@ Use an idle pipeline GPU, not one occupied by a web worker:
 | :-- | :-- |
 | `--target-language en` | Required target language: `zh/en/ja/ko/de/fr/ru/pt/es/it` |
 | `--source-language zh` | Override automatic source-language detection |
-| `--duration-mode adaptive_video` | Adjust eligible video and background-audio segments to translated speech; default configuration |
 | `--duration-mode fixed` | Keep video duration and fit translated speech into its time window |
 | `--resume` | Resume the same request; use a new output directory after changing inputs or configuration |
 
@@ -239,7 +238,6 @@ Use an idle pipeline GPU, not one occupied by a web worker:
 | File | Contents |
 | :-- | :-- |
 | `final.mp4` | Delivered video |
-| `final_fixed.mp4` | Pre-retiming video, retained in adaptive mode |
 | `source.txt` / `translated.txt` | Recognized and translated dialogue |
 | `report.json` | Audio replacement, lip-sync outcomes, separate translation/TTS timings |
 | `run.json` / `logs/` | Pipeline progress and stage logs |

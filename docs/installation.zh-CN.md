@@ -230,7 +230,6 @@ CLOUDFLARED_BIN=/path/to/cloudflared PORT=18320 bash scripts/public.sh
 | :-- | :-- |
 | `--target-language en` | 必填目标语言：`zh/en/ja/ko/de/fr/ru/pt/es/it` |
 | `--source-language zh` | 手动指定源语言，覆盖自动识别 |
-| `--duration-mode adaptive_video` | 根据译音调整符合条件的视频与背景声片段；默认配置 |
 | `--duration-mode fixed` | 保持视频时长，将译音适配到原时窗 |
 | `--resume` | 续跑同一个请求；更改输入或配置后应使用新的输出目录 |
 
@@ -239,7 +238,6 @@ CLOUDFLARED_BIN=/path/to/cloudflared PORT=18320 bash scripts/public.sh
 | 文件 | 内容 |
 | :-- | :-- |
 | `final.mp4` | 最终视频 |
-| `final_fixed.mp4` | 自适应时长模式下保留的调整前视频 |
 | `source.txt` / `translated.txt` | 识别的对白与译文 |
 | `report.json` | 音频替换、口型处理结果，翻译与 TTS 分项耗时 |
 | `run.json` / `logs/` | 管线进度与阶段日志 |

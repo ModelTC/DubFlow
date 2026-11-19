@@ -4,7 +4,6 @@ import hashlib
 from dataclasses import dataclass, field
 import json
 import math
-import re
 import subprocess
 import sys
 import time
@@ -15,13 +14,15 @@ import soundfile as sf
 from runtime.utils import file_signature as signature, write_json
 from runtime.clients import Translator
 
-from stages.speech.model import create_speech_model, translation_prompt
+from stages.speech.model import REVIEW_SYSTEM, create_speech_model, semantic_review_prompt, translation_prompt
+from stages.speech.timing import (CJK, MAX_TEMPO, TIMING_POLICY, SourcePauses, available_seconds,
+                                  calibrate_voices, estimated_seconds, placement, shortening_budget, text_units)
 from stages.speech.utils import (atempo_filter, audio_signature, loudness_references, prepare_waveform, record_timing, save_record,
-                                 summarize_timings)
+                                 summarize_timings, write_voice_reference)
 
 SHORTENING_ROUNDS = 3
-SHORTENING_TRIGGER_RATIO = 1.1
-SHORTENING_MIN_DURATION_RATIO = .9
+SHORTENING_TRIGGER_TEMPO = 1.05
+SHORT_SAMPLE_RETRIES = 3
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -54,8 +55,9 @@ def preserve(record, reason):
     return {**record, "status": "preserve_original", "reason": reason}
 
 
-def speaking_windows(plan):
-    """只借相邻静默；共享静默在中点分开，不越过其他台词或新增切镜。"""
+def speaking_windows(plan, waveform=None, rate=48000):
+    """Allow bounded neighboring pauses; picture cuts are handled by lip planning."""
+    pauses = SourcePauses(waveform, rate) if waveform is not None else None
     duration, fps = plan["frames"] / plan["fps"], plan["fps"]
     records = []
     for record in plan["utterances"]:
@@ -82,30 +84,15 @@ def speaking_windows(plan):
                  min(other["end"], record["end"]) - max(other["start"], record["start"]) > 1 / fps
                  for other in records):
             reason = "overlapping_speech"
-        left_cut = max(shot["start_frame"] / fps for shot in plan["shots"] if shot["start_frame"] / fps <= record["start"])
-        right_cut = min(shot["end_frame"] / fps for shot in plan["shots"] if shot["end_frame"] / fps >= record["end"])
-        left = max(0, left_cut, record["start"] - .25)
-        right = min(duration, right_cut, record["end"] + .65)
+        left = max(0., record["start"] - .35)
+        right = min(duration, record["end"] + .65)
         if index:
-            left = max(left, (records[index - 1]["end"] + record["start"]) / 2)
+            left = max(left, min(record["start"], (records[index - 1]["end"] + record["start"]) / 2))
         if index + 1 < len(records):
-            right = min(right, (record["end"] + records[index + 1]["start"]) / 2)
-        # 核心台词可见时，借用静默不能把口型推到人物已经转身/离画之后。
-        for shot in plan["shots"]:
-            if not shot["start_frame"] / fps <= record["start"] < record["end"] <= shot["end_frame"] / fps:
-                continue
-            visible = {frame for track in plan["tracks"]
-                       if track["person_id"] == record["person_id"] and track["shot_id"] == shot["id"]
-                       for frame in track["frames"]} if record["person_id"] else set()
-            first = max(shot["start_frame"], math.floor((record["start"] - .04) * fps))
-            last = min(shot["end_frame"], math.ceil((record["end"] + .04) * fps))
-            if visible and all(frame in visible for frame in range(first, last)):
-                while first > shot["start_frame"] and first - 1 in visible:
-                    first -= 1
-                while last < shot["end_frame"] and last in visible:
-                    last += 1
-                left, right = max(left, first / fps + .04), min(right, last / fps - .04)
-            break
+            right = min(right, max(record["end"], (record["end"] + records[index + 1]["start"]) / 2))
+        if pauses is not None:
+            left = pauses.bound(record["start"], left)
+            right = pauses.bound(record["end"], right)
         item = {**record, "window_start": left, "window_end": right, "tts_seed_index": index,
                 "human_speech": record.get("human_speech", True), "status": "pending", "reason": None}
         if item["human_speech"]:
@@ -119,28 +106,6 @@ def speaking_windows(plan):
             reason = None
         result.append(preserve(item, reason) if reason else item)
     return result
-
-
-def adaptive_shrink_candidates(records, plan):
-    """Only retime isolated speech wholly inside one source shot."""
-    fps = plan["fps"]
-    shots = plan["shots"]
-    spans = {record["id"]: (math.floor(record["start"] * fps), math.ceil(record["end"] * fps))
-             for record in records}
-    candidates = set()
-    for record in records:
-        if record["status"] == "preserve_original" or record.get("audio_only"):
-            continue
-        first, last = spans[record["id"]]
-        if last - first < 4:
-            continue
-        if not any(shot["start_frame"] <= first < last <= shot["end_frame"] for shot in shots):
-            continue
-        if any(other_id != record["id"] and first < other_last and other_first < last
-               for other_id, (other_first, other_last) in spans.items()):
-            continue
-        candidates.add(record["id"])
-    return candidates
 
 
 def _voice_reference_aliases(records, speaker_bindings):
@@ -241,7 +206,7 @@ def voice_references(records, waveform, rate, output, speaker_bindings=None):
         if len(audio) < rate:
             audio = np.pad(audio, (0, rate - len(audio)))
         path = output / f"voice_{number:02d}.wav"
-        sf.write(path, audio, rate, subtype="FLOAT")
+        write_voice_reference(path, audio, rate)
         references[speaker] = {"path": str(path), "text": " ".join(record["text"] for record in selected),
                                "duration": len(audio) / rate,
                                "source_intervals": [{"id": record["id"], "start": record["start"], "end": record["end"]}
@@ -277,29 +242,58 @@ def require_complete_dialogue(records, output, stage, allow_pending=False):
         raise RuntimeError(f"Incomplete translated dialogue at {stage}: {', '.join(row['id'] for row in missing)}")
 
 
+def ask_translator(translator, prompt, output, *, system=None):
+    started = time.perf_counter()
+    try:
+        return translator(prompt, system=system, allow_partial=True) if system else translator(prompt)
+    finally:
+        if output is not None:
+            record_timing(output, "translation", time.perf_counter() - started, 1)
+
+
 def translate(records, conversation, config, shorten=False, output=None):
     translator = Translator(config.translation_url, config.translation_model,
                             config.translation_api_key_env, config.translation_backend, config.translation_options)
     results = []
     try:
         for record in records:
-            prompt = translation_prompt(record, conversation, config.source_language,
-                                        config.target_language, shorten)
-            started = time.perf_counter()
-            try:
-                text = translator(prompt)
-            finally:
-                if output is not None:
-                    record_timing(output, "translation", time.perf_counter() - started, 1)
             round_number = record.get("shortening_round", int(shorten))
-            history = [*record.get("translation_history", []),
-                       {"round": round_number, "source_text": record["text"], "text": text,
-                        "available_seconds": available_seconds(record),
-                        "word_budget": record.get("shortening_word_budget")}]
-            item = {**record, "target_text": text, "raw_model_text": text,
+            history = list(record.get("translation_history", []))
+            prompt_record = record
+            for attempt in range(2 if shorten else 1):
+                prompt = translation_prompt(prompt_record, conversation, config.source_language,
+                                            config.target_language, shorten)
+                proposed = ask_translator(translator, prompt, output)
+                review, feedback = "initial_translation", None
+                if shorten:
+                    if proposed == record["target_text"]:
+                        review = "unchanged"
+                    else:
+                        review_prompt = semantic_review_prompt(record, proposed, config.source_language,
+                                                               config.target_language)
+                        answer = ask_translator(translator, review_prompt, output, system=REVIEW_SYSTEM)
+                        verdict = answer.split("\n", 1)[0].strip().strip("*`\"").rstrip(".")
+                        review = "passed" if verdict.upper() == "PASS" else "rejected"
+                        if review == "rejected":
+                            label, _, detail = verdict.partition(":")
+                            if label.strip().upper() == "FAIL":
+                                feedback = detail.strip()[:300]
+                history.append({"round": round_number, "source_text": record["text"], "text": proposed,
+                                "review": review, "review_feedback": feedback,
+                                "available_seconds": available_seconds(record),
+                                "word_budget": record.get("shortening_word_budget")})
+                if shorten and review == "unchanged" and attempt == 0:
+                    prompt_record = {**record, "try_different_wording": True}
+                    continue
+                if shorten and review == "rejected" and feedback and attempt == 0:
+                    prompt_record = {**record, "rejected_translation": proposed, "review_feedback": feedback}
+                    continue
+                break
+            text = record["target_text"] if review == "rejected" else proposed
+            item = {**record, "target_text": text, "raw_model_text": proposed,
                     "translation_history": history, "translation_source": config.translation_model,
                     "translation_attempt": round_number, "translation_ready": True,
-                    "translation_review": "disabled", "time_compression_policy": "uncapped"}
+                    "translation_review": review, "time_compression_policy": TIMING_POLICY}
             if output is not None:
                 save_record(output, item)
             results.append(item)
@@ -352,9 +346,12 @@ def synthesize(records, references, config, output, attempt=0):
     rows, pending, results = [], [], {}
     for index, record in enumerate(records):
         reference = references[record["speaker_id"]]
-        if "tts_cache_settings" in record:
+        existing_settings = record.get("tts_cache_settings")
+        matching_conditioning = False
+        if existing_settings:
             started = time.perf_counter()
             settings = synthesis_settings(record, reference, config, backend, record["tts_seed"], index)
+            matching_conditioning = settings == existing_settings
             if reusable_tts(record, settings):
                 item = {**record, "tts_reused": True}
                 save_record(output, item)
@@ -363,14 +360,20 @@ def synthesize(records, references, config, output, attempt=0):
                 print(f"TTS cache {item['id']}: {item['tts_duration']:.3f}s", flush=True)
                 continue
         current_attempt = max(attempt, record.get("tts_attempt", 0), record.get("translation_attempt", 0))
-        seed = config.seed + record.get("tts_seed_index", index) + current_attempt * 1000
-        settings = synthesis_settings(record, reference, config, backend, seed, index)
+        if matching_conditioning:
+            seed = record["tts_seed"]
+        else:
+            seed = (config.seed + record.get("tts_seed_index", index) + current_attempt * 1000
+                    + record.get("tts_sample_offset", 0))
+            settings = synthesis_settings(record, reference, config, backend, seed, index)
         digest = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:20]
         path = output / f"tts_{record['id']}_{digest}.wav"
         rows.append({"path": str(path), "text": record["target_text"], "reference": reference.get("path"),
                      "reference_text": reference.get("text", ""), "seed": seed,
                      "x_vector_only_mode": config.qwen_x_vector_only_mode})
         fresh = {key: value for key, value in record.items() if not key.startswith("tts_") or key == "tts_seed_index"}
+        if not matching_conditioning:
+            fresh.pop("natural_resample_attempted", None)
         pending.append({**fresh, "tts_seed": seed, "tts_attempt": current_attempt,
                         "tts_backend": config.tts_backend, "tts_model": backend.name,
                         "tts_reference_mode": backend.reference_mode,
@@ -395,30 +398,6 @@ def synthesize(records, references, config, output, attempt=0):
     return [results[record["id"]] for record in records]
 
 
-def placement(record, duration_mode="fixed"):
-    natural = record["tts_duration"]
-    start = max(record["window_start"], record["start"])
-    capacity = record["window_end"] - start
-    source_duration = record["end"] - start
-    if (duration_mode == "adaptive_video" and record.get("adaptive_shrink_eligible")
-            and natural < source_duration - .08):
-        # Render the mouth against slow speech first. Export then contracts this
-        # same source interval, restoring the TTS pace while retiming the video.
-        return start, natural / max(.01, source_duration - .04)
-    # atempo 的块长舍入留 40ms 余量；不裁掉任何已生成的语音。
-    tempo = 1.0 if natural <= capacity + 1 / 48000 else natural / max(.01, capacity - .04)
-    return start, tempo
-
-
-def effective_tempo(record):
-    native_speed = record.get("tts_natural_duration", record["tts_duration"]) / record["tts_duration"]
-    return placement(record)[1] * native_speed
-
-
-def available_seconds(record):
-    return max(0., record["window_end"] - max(record["window_start"], record["start"]))
-
-
 def speech_attempt(record, round_number):
     result = {"round": round_number, "source_text": record["text"],
               "target_text": record.get("target_text"), "available_seconds": available_seconds(record),
@@ -426,84 +405,50 @@ def speech_attempt(record, round_number):
     if record["status"] != "preserve_original":
         result.update(tts_duration=record["tts_duration"],
                       tts_natural_duration=record.get("tts_natural_duration", record["tts_duration"]),
-                      effective_tempo=effective_tempo(record), tts_attempt=record["tts_attempt"],
+                      effective_tempo=placement(record)[1], tts_attempt=record["tts_attempt"],
                       tts_seed=record.get("tts_seed"), post_tempo=placement(record)[1],
                       fits=placement(record)[1] == 1, tts_reused=record.get("tts_reused", False))
     return result
 
 
-def shortening_budget(record, language):
-    text = record["target_text"]
-    units = (sum(character.isalnum() for character in text) if language in ("zh", "ja", "ko")
-             else len(re.findall(r"\b[^\W\d_]+(?:['’][^\W\d_]+)*\b", text)))
-    duration = record["tts_duration"]
-    target = .95 * available_seconds(record)
-    estimate = max(1, round(units * target / max(duration, .01)))
-    if duration > available_seconds(record):
-        return min(max(1, units - 1), estimate)
-    return max(units + 1, estimate)
-
-
 def shorten_to_fit(records, references, config, output):
-    """Use measured TTS duration for up to three revisions, keeping the best dub."""
-    if config.duration_mode == "adaptive_video":
-        return records  # The picture follows natural speech; do not shorten the translation as well.
-    best, probe, attempts, histories = {}, {}, {}, {}
-    for record in records:
-        item = dict(record)
-        if item["status"] != "preserve_original" and not item.get("speech_attempts"):
-            item["speech_attempts"] = [speech_attempt(item, 0)]
-        key = item["id"]
-        best[key] = probe[key] = item
-        attempts[key] = item.get("speech_attempts", [])
-        histories[key] = item.get("translation_history", [])
-        completed = item.get("shortening_rounds_completed", 0)
-        if completed:
-            checkpoint = output / f"shortening_round_{completed}" / "items" / f"{key}.json"
-            if checkpoint.is_file():
-                previous_probe = json.loads(checkpoint.read_text())
-                if previous_probe["status"] != "preserve_original" and "tts_duration" in previous_probe:
-                    probe[key] = previous_probe
+    """Refine long translations using each voice's measured speaking rate."""
+    calibration_path = output / "duration_calibration.json"
+    if calibration_path.is_file():
+        calibration = json.loads(calibration_path.read_text())
+    else:
+        calibration = calibrate_voices(records, references, config.target_language)
+        write_json(calibration_path, calibration)
 
+    best = {row["id"]: {**row, "speech_attempts": row.get("speech_attempts") or [speech_attempt(row, 0)]}
+            for row in records}
     for round_number in range(1, SHORTENING_ROUNDS + 1):
         pending = []
-        for record in records:
-            key = record["id"]
-            selected = best[key]
-            if selected["status"] == "preserve_original" or selected.get("shortening_stopped_reason"):
+        for item in best.values():
+            if (item["status"] == "preserve_original" or item.get("shortening_stopped_reason")
+                    or item.get("shortening_rounds_completed", 0) >= round_number
+                    or placement(item)[1] <= SHORTENING_TRIGGER_TEMPO):
                 continue
-            completed = selected.get("shortening_rounds_completed", 0)
-            capacity = available_seconds(selected)
-            duration = selected["tts_duration"]
-            if (completed >= round_number or capacity <= 0 or
-                    (not completed and duration <= SHORTENING_TRIGGER_RATIO * capacity) or
-                    SHORTENING_MIN_DURATION_RATIO * capacity <= duration <= capacity):
-                continue
-            previous_probe = probe[key]
-            pending.append({**previous_probe, "translation_history": histories[key],
-                            "speech_attempts": attempts[key], "shortening_round": round_number,
-                            "available_seconds": capacity,
-                            "shortening_word_budget": shortening_budget(previous_probe, config.target_language)})
+            pending.append({**item, "shortening_round": round_number,
+                            "shortening_word_budget": shortening_budget(item, config.target_language,
+                                                                         calibration, references)})
         if not pending:
             continue
         round_output = output / f"shortening_round_{round_number}"
         round_output.mkdir(exist_ok=True)
-        shortened = translate(pending, records, config, shorten=True, output=round_output)
+        shortened = translate(pending, list(best.values()), config, shorten=True, output=round_output)
         for candidate in synthesize(shortened, references, config, round_output, attempt=round_number):
             key = candidate["id"]
-            selected = best[key]
-            capacity = available_seconds(selected)
-            histories[key] = candidate["translation_history"]
-            attempts[key] = [*attempts[key], speech_attempt(candidate, round_number)]
-            probe[key] = candidate
-            improved = (candidate["tts_duration"] >= SHORTENING_MIN_DURATION_RATIO * capacity
-                        and abs(candidate["tts_duration"] - capacity) < abs(selected["tts_duration"] - capacity))
-            if improved:
-                selected = candidate
-            selected = {**selected, "translation_history": histories[key], "speech_attempts": attempts[key],
+            previous = best[key]
+            improved = candidate["tts_duration"] < previous["tts_duration"] - .02
+            selected = {**(candidate if improved else previous),
+                        "translation_history": candidate["translation_history"],
+                        "speech_attempts": [*previous["speech_attempts"], speech_attempt(candidate, round_number)],
                         "shortening_rounds_completed": round_number,
                         "shortening_word_budget": candidate["shortening_word_budget"]}
-            if candidate.get("tts_reused"):
+            if candidate.get("translation_review") == "rejected":
+                selected["shortening_stopped_reason"] = "meaning_review_rejected"
+            elif candidate.get("tts_reused"):
                 selected["shortening_stopped_reason"] = "unchanged_translation"
             elif not improved:
                 selected["shortening_stopped_reason"] = "no_duration_improvement"
@@ -512,30 +457,108 @@ def shorten_to_fit(records, references, config, output):
     return [best[record["id"]] for record in records]
 
 
-def align_record(record, output, duration_mode="fixed"):
-    start, tempo = placement(record, duration_mode)
+def resample_short_utterances(records, references, config, output):
+    """Sample a few natural takes for short reactions or near-fit speech."""
+    if config.tts_backend != "qwen3tts":
+        return records
+    eligible = {row["id"]: row for row in records
+                if row["status"] != "preserve_original" and placement(row)[1] > MAX_TEMPO
+                and (text_units(row["target_text"], config.target_language) <= (3 if config.target_language in CJK else 1)
+                     or placement(row)[1] <= 1.35
+                     or row["tts_duration"] > 1.6 * estimated_seconds(row["target_text"], config.target_language))
+                and not row.get("natural_resample_attempted")}
+    if not eligible:
+        return records
+    attempts_dir = output / "short_utterance_resample"
+    attempts_dir.mkdir(exist_ok=True)
+    variants = [{**row, "id": f"{key}_sample_{sample}", "tts_sample_offset": sample * 71}
+                for key, row in eligible.items() for sample in range(1, SHORT_SAMPLE_RETRIES + 1)]
+    for variant in variants:
+        variant.pop("tts_cache_settings", None)
+    samples = synthesize(variants, references, config, attempts_dir)
+    best = dict(eligible)
+    for measured in samples:
+        key = measured["id"].rsplit("_sample_", 1)[0]
+        candidate = {**measured, "id": key}
+        if candidate["tts_duration"] < best[key]["tts_duration"]:
+            best[key] = candidate
+    for key, selected in best.items():
+        best[key] = {**selected, "natural_resample_attempted": True}
+        save_record(output, best[key])
+    return [best.get(row["id"], row) for row in records]
+
+
+def duration_fit_issue(row, tempo, reason="natural_speech_exceeds_window"):
+    return {"id": row["id"], "text": row["text"], "target_text": row["target_text"],
+            "reason": reason, "natural_seconds": row["tts_duration"], "available_seconds": available_seconds(row),
+            "required_tempo": tempo, "max_tempo": MAX_TEMPO}
+
+
+def duration_fit_error(failures, output):
+    write_json(output / "incomplete.json", {"status": "incomplete", "audio_policy": "complete_dialogue",
+                                            "stage": "duration_fit", "missing_dialogue": failures})
+    ratios = ", ".join(f"{row['id']} ({row['required_tempo']:.2f}x)" for row in failures)
+    raise RuntimeError(f"Dialogue exceeds the {MAX_TEMPO:.2f}x tempo limit on the fixed timeline: {ratios}")
+
+
+def required_tempo(record):
+    return record["tts_duration"] / max(1 / 48000, available_seconds(record))
+
+
+def require_duration_fit(records, output):
+    failures = [duration_fit_issue(row, required_tempo(row)) for row in records
+                if row["status"] != "preserve_original" and required_tempo(row) > MAX_TEMPO]
+    if failures:
+        duration_fit_error(failures, output)
+
+
+def align_record(record, output):
+    start, preferred = placement(record)
+    if preferred > MAX_TEMPO:
+        # Short clips can be rejected by the rounding guard even when the actual
+        # atempo output fits. Measure at a few bounded speeds instead.
+        minimum = min(required_tempo(record), MAX_TEMPO)
+        tempos = (minimum, (minimum + MAX_TEMPO) / 2, MAX_TEMPO)
+    else:
+        tempos = (preferred, MAX_TEMPO)
     path = output / f"aligned_{record['id']}.wav"
-    settings = {"source": signature(record["tts_raw_path"]), "start": start, "tempo": tempo}
     meta = path.with_suffix(".json")
-    if not (meta.is_file() and json.loads(meta.read_text()) == settings and path.is_file()):
-        temporary = path.with_suffix(".tmp.wav")
-        command = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", record["tts_raw_path"]]
-        if tempo != 1:
-            command.extend(["-af", atempo_filter(tempo)])
-        subprocess.run(command + ["-ar", "48000", "-ac", "2", "-c:a", "pcm_f32le", str(temporary)], check=True)
-        temporary.replace(path)
-        write_json(meta, settings)
-    audio, rate = sf.read(path, dtype="float32", always_2d=True)
-    first, last = round(start * rate), round(start * rate) + len(audio)
-    if last > round(record["window_end"] * rate) or not np.isfinite(audio).all():
-        raise ValueError(f"Retimed speech is invalid or exceeds its window: {record['id']}")
+    cached = json.loads(meta.read_text()) if meta.is_file() and path.is_file() else None
+    temporary = path.with_suffix(".tmp.wav")
+    source = signature(record["tts_raw_path"])
+    try:
+        for tempo in dict.fromkeys(tempos):
+            settings = {"source": source, "start": start, "tempo": tempo}
+            audio_path = path
+            if settings != cached:
+                audio_path = temporary
+                command = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", record["tts_raw_path"]]
+                if tempo != 1:
+                    command.extend(["-af", atempo_filter(tempo)])
+                subprocess.run(command + ["-ar", "48000", "-ac", "2", "-c:a", "pcm_f32le", str(temporary)], check=True)
+            audio, rate = sf.read(audio_path, dtype="float32", always_2d=True)
+            if not np.isfinite(audio).all():
+                raise ValueError(f"Non-finite retimed speech: {record['id']}")
+            first, last = round(start * rate), round(start * rate) + len(audio)
+            if last <= round(record["window_end"] * rate):
+                if audio_path == temporary:
+                    temporary.replace(path)
+                    write_json(meta, settings)
+                break
+        else:
+            fitted_seconds = len(audio) / rate
+            estimated = MAX_TEMPO * fitted_seconds / max(1 / rate, record["window_end"] - start)
+            issue = duration_fit_issue(record, estimated, "rendered_speech_exceeds_window")
+            duration_fit_error([{**issue, "rendered_seconds_at_max_tempo": fitted_seconds}], output)
+    finally:
+        temporary.unlink(missing_ok=True)
     row = {**record, "status": "translated", "reason": None, "start": first / rate, "end": last / rate,
            "source_interval": {"start": record["start"], "end": record["end"]},
            "allowed_interval": {"start": record["window_start"], "end": record["window_end"]},
            "tts_aligned_path": str(path), "tempo_ratio": tempo,
-           "adaptive_shortening_prepared": duration_mode == "adaptive_video" and tempo < 1}
+           "borrowed_pause_seconds": max(0., record["start"] - first / rate) + max(0., last / rate - record["end"])}
     natural = record.get("tts_natural_duration", record["tts_duration"])
-    row.update(max_tempo=None, time_compression={"natural_seconds": natural,
+    row.update(max_tempo=MAX_TEMPO, time_compression={"natural_seconds": natural,
                "native_duration_factor": record.get("tts_native_duration_factor", 1.),
                "native_speed": natural / record["tts_duration"], "post_speed": tempo,
                "total_speed": natural / record["tts_duration"] * tempo,
@@ -544,6 +567,7 @@ def align_record(record, output, duration_mode="fixed"):
 
 
 def assemble(records, references, plan, config, output):
+    require_duration_fit(records, output)
     duration = plan["frames"] / plan["fps"]
     samples = round(duration * 48000)
     tracks = {speaker: np.zeros((samples, 2), np.float32) for speaker in references}
@@ -552,7 +576,7 @@ def assemble(records, references, plan, config, output):
         if record["status"] == "preserve_original":
             row, aligned = record, None
         else:
-            row, aligned = align_record(record, output, config.duration_mode)
+            row, aligned = align_record(record, output)
         if aligned is None:
             save_record(output, preserve(record, row["reason"]))
             row = {**row, "attempted_target_text": row.get("target_text")}
@@ -586,24 +610,33 @@ def assemble(records, references, plan, config, output):
               "replace_intervals": [{"id": row["id"], **row["source_interval"]} for row in successful],
               "counts": {"translated": len(successful), "preserve_original": len(utterances) - len(successful)},
               "human_review_required": False}
-    result.update(audio_policy="complete_dialogue", audio_complete=True)
+    calibration_path = output / "duration_calibration.json"
+    result.update(audio_policy="complete_dialogue", audio_complete=True,
+                  timing_fit={"policy": TIMING_POLICY, "max_tempo": MAX_TEMPO,
+                              "max_applied_tempo": max((row["tempo_ratio"] for row in successful), default=1.),
+                              "accelerated_utterances": sum(row["tempo_ratio"] > 1 for row in successful),
+                              "borrowed_pause_utterances": sum(row["borrowed_pause_seconds"] > 1 / 48000
+                                                               for row in successful),
+                              "calibration": json.loads(calibration_path.read_text()) if calibration_path.is_file() else {}})
     (output / "source_text.txt").write_text("\n".join(f"{row['id']} {row['text']}" for row in utterances) + "\n")
     (output / "translated.txt").write_text("\n".join(f"{row['id']} {row['target_text']}" for row in successful) + "\n")
     timings = summarize_timings(output)
     if timings is not None:
         result["timings"] = timings
     write_json(output / "dialogue.json", result)
+    (output / "incomplete.json").unlink(missing_ok=True)
     return result
 
 
 def run_speech(config):
     output = Path(config.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    duration_mode = config.duration_mode
+    if config.duration_mode != "fixed":
+        raise ValueError("Dubbing requires a fixed video timeline")
     request = {"plan": signature(config.plan), "source_speech": signature(config.speech_source),
                "source_language": config.source_language,
-               "target_language": config.target_language, "duration_mode": duration_mode,
-               "seed": config.seed, "recipe": 11}
+               "target_language": config.target_language, "duration_mode": "fixed",
+               "seed": config.seed, "recipe": 12}
     backend = create_speech_model(config)
     request["backends"] = {
         "tts_identity": backend.identity,
@@ -617,9 +650,10 @@ def run_speech(config):
         "speech_adapter": signature(Path(__file__)),
         "adapter": signature(Path(__file__).with_name("model.py")),
         "utils": signature(Path(__file__).with_name("utils.py")),
+        "timing": signature(Path(__file__).with_name("timing.py")),
     }
-    request["backends"].update(translation_review="disabled", shortening_rounds=0 if duration_mode == "adaptive_video" else SHORTENING_ROUNDS,
-                               time_compression_policy="uncapped", max_tempo=None, audio_policy="complete_dialogue")
+    request["backends"].update(translation_review="llm_semantic_review", shortening_rounds=SHORTENING_ROUNDS,
+                               time_compression_policy=TIMING_POLICY, max_tempo=MAX_TEMPO, audio_policy="complete_dialogue")
     request_path = output / "request.json"
     if request_path.exists():
         if json.loads(request_path.read_text()) != request:
@@ -642,17 +676,15 @@ def run_speech(config):
             raise FileExistsError(output)
         write_json(request_path, request)
     plan = json.loads(Path(config.plan).read_text())
-    records = speaking_windows(plan)
-    if duration_mode == "adaptive_video":
-        eligible = adaptive_shrink_candidates(records, plan)
-        records = [{**record, "adaptive_shrink_eligible": record["id"] in eligible} for record in records]
     audio, rate = sf.read(config.speech_source, dtype="float32", always_2d=True)
     if rate != 48000 or len(audio) != round(plan["frames"] / plan["fps"] * rate):
         raise ValueError("Source speech must share the plan's 48kHz timeline")
+    waveform = audio.mean(1)
+    records = speaking_windows(plan, waveform, rate)
     if config.tts_backend == "qwen3tts":
-        references = voice_references(records, audio.mean(1), rate, output, speaker_bindings=plan.get("speakers"))
+        references = voice_references(records, waveform, rate, output, speaker_bindings=plan.get("speakers"))
     else:
-        references = loudness_references(records, audio.mean(1), rate, config.tts_voice)
+        references = loudness_references(records, waveform, rate, config.tts_voice)
     write_json(output / "voice_references.json", references)
     for index, record in enumerate(records):
         checkpoint = output / "items" / f"{record['id']}.json"
@@ -671,6 +703,7 @@ def run_speech(config):
     synthesized = {record["id"]: record for record in synthesize(ready, references, config, output)} if ready else {}
     records = [synthesized.get(record["id"], record) for record in records]
     records = shorten_to_fit(records, references, config, output)
+    records = resample_short_utterances(records, references, config, output)
     for record in records:
         save_record(output, record)
     result = assemble(records, references, plan, config, output)

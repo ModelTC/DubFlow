@@ -16,7 +16,7 @@ from stages.speakers.bind import VISUAL_BINDING_POLICY, speaker_turn_merge_polic
 
 def configure(args, resident):
     config = load_config(args.config)
-    for key in ("gpu", "source_language", "target_language", "duration_mode", "merge_speaker_turns"):
+    for key in ("gpu", "source_language", "target_language", "merge_speaker_turns"):
         value = getattr(args, key, None)
         if value is not None:
             config[key] = value
@@ -27,9 +27,7 @@ def configure(args, resident):
         raise ValueError(f"Unsupported source language {source!r}")
     if source != "auto" and source == config["target_language"]:
         raise ValueError("Source and target languages must differ")
-    config.setdefault("duration_mode", "fixed")
-    if config["duration_mode"] not in ("fixed", "adaptive_video"):
-        raise ValueError("duration_mode must be fixed or adaptive_video")
+    config["duration_mode"] = "fixed"
     for key in ("context_seconds", "transition_seconds"):
         value = getattr(args, key, None)
         if value is not None:
@@ -51,8 +49,6 @@ def configure(args, resident):
                   pipeline_recipe=f"{config['translation_backend']}_lightx2v_large_tv_loconet_v3",
                   content_verification="disabled", separation_recipe="sam_large_tv_asr_anchors",
                   separation_validation="disabled")
-    if config["duration_mode"] == "adaptive_video":
-        config["retiming_policy"] = "paired_av_segments_v2"
     return config
 
 
@@ -75,7 +71,6 @@ class Pipeline:
         self.job = Job(args, self.config, execute)
         self.inputs, self.paths = self.job.inputs, self.job.paths
         self.state = self.job.state
-        self.duration_mode = self.config["duration_mode"]
         self.merge_policy = self.config.get("speaker_turn_merge_policy") if self.config.get("merge_speaker_turns") else None
         self.state["stage_order"] = [] if self.inputs.analysis_plan else [
             "prepare", "audio_nemotron3", "vision", "identity", "fusion"]
@@ -84,8 +79,6 @@ class Pipeline:
         if not self.inputs.dialogue:
             self.state["stage_order"].append("speech")
         self.state["stage_order"] += ["audio_mix", "target", "rois", "render", "compose"]
-        if self.duration_mode == "adaptive_video":
-            self.state["stage_order"].append("adaptive_duration")
         self.state["stage_order"].append("report")
         self.save_state()
 
@@ -202,7 +195,7 @@ class Pipeline:
                             "qwen_x_vector_only_mode")
             self.stage("speech", "speech", "stages.speech.run", dialogue, gpu=True,
                        plan=source_plan, speech_source=separated["source_speech_path"], output_dir=p.speech,
-                       source_language=language, target_language=c["target_language"], duration_mode=self.duration_mode,
+                       source_language=language, target_language=c["target_language"],
                        **{key: c[key] for key in backend_keys if key in c})
         self.state["selected_dialogue_path"] = str(dialogue)
         self.save_state()
@@ -228,19 +221,12 @@ class Pipeline:
         self.stage("render", "video", "stages.lipsync.run", p.render_manifest,
                    plan=p.native_plan, output_dir=p.render, server_url=c["tbdub_url"])
 
-    def compose(self, source_plan, dialogue):
+    def compose(self):
         c, p = self.config, self.paths
-        adaptive = self.duration_mode == "adaptive_video"
-        video = p.fixed_video if adaptive else p.final
         self.stage("compose", "video", "stages.postprocess.run", p.compose,
-                   plan=p.native_plan, manifest=p.render_manifest, output=video,
-                   comparison=p.comparison if c["comparison"] and not adaptive else None,
+                   plan=p.native_plan, manifest=p.render_manifest, output=p.final,
+                   comparison=p.comparison if c["comparison"] else None,
                    transition_seconds=c["transition_seconds"])
-        if adaptive:
-            self.stage("adaptive_duration", "video", "stages.postprocess.retime", p.adaptation,
-                       source=video, plan=source_plan, dialogue=dialogue, output=p.final, manifest=p.adaptation)
-            if not p.final.is_file():
-                raise FileNotFoundError(p.final)
         self.stage("report", "video", "stages.postprocess.report", p.report, run_dir=p.root)
 
     def run(self):
@@ -254,7 +240,7 @@ class Pipeline:
             manifest, separated = self.separate(source_plan, duration)
             dialogue, rows = self.speak(source_plan, separated, language)
             self.render(source_plan, manifest, dialogue, rows, duration)
-            self.compose(source_plan, dialogue)
+            self.compose()
         except BaseException as error:
             self.state.update(status="failed", error=str(error))
             self.save_state()

@@ -9,7 +9,7 @@
 
 <p align="center">
   Translate conversations, clone speaker voices, and synchronize lips across shot changes.<br />
-  Adapt video timing to translated speech and remix it with the original background sound.
+  Fit translated speech to the original timeline and remix it with the original background sound.
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@ From interviews and dialogue scenes to single-speaker presentations, LightDubber
 | **Across shot changes** | Match recurring faces across shots and plan lip-sync edits within each shot's boundaries. |
 | **Contextual translation** | Translate into 10 target languages using surrounding dialogue and speaker history as context, with automatic source-language detection. |
 | **Voice cloning & lip sync** | Use each speaker's reference audio for local voice cloning, then drive the matched face with the translated speech through LightX2V. |
-| **Adaptive duration** | Keep the original runtime, or extend and shorten eligible segments to fit the translated speech. |
+| **Duration-aware dialogue** | Write concise translations, measure synthesized speech, and use available pauses to fit the original timeline. |
 | **Background ambience** | Separate dialogue from background audio, then remix the new voices with the source music and ambient sound. |
 | **Local models or APIs** | Choose local inference or translation/TTS APIs independently, and replace individual models without rewriting the workflow. |
 | **Web UI & CLI** | Upload videos, queue jobs, preview results, or automate the same workflow from the command line. |
@@ -92,12 +92,12 @@ https://github.com/user-attachments/assets/ffc9e8b9-be30-41cf-aec9-19c4e5c4f54e
 1. **Map the conversation across shots.** Detect shot boundaries, recover dialogue and timing, and associate spoken lines with recurring on-screen characters.
 2. **Translate and voice each turn.** Use conversational context to translate each line, and generate the new speech with local voice cloning or your chosen TTS API.
 3. **Synchronize the right face.** Drive the matched speaker's mouth with the translated audio, then blend the edited region back into its original shot.
-4. **Fit the dub to the scene.** Remix the background sound and either preserve the original runtime or retime eligible segments together with their audio to match the translated speech.
+4. **Fit the dub to the scene.** Place the measured speech within its dialogue window and mix it with the original background on the same timeline.
 
 <details>
 <summary>Timing modes and voice options</summary>
 
-**Fixed duration** fits translated speech into the original timeline. **Adaptive duration** can extend or shorten isolated dialogue segments within a single shot, adjusting video and audio together; segments that cross cuts or overlap other dialogue retain their original duration.
+The pipeline keeps the original timeline and uses nearby pauses where the dialogue allows it. It checks revised translations for meaning and bounds speech speed. If a line still exceeds its window, the job reports the timing conflict for review.
 
 Local Qwen3-TTS supports voice cloning when suitable speaker references are available; API TTS uses the provider's preset voices. Dialogue without a reliable visible face is dubbed without a mouth edit.
 
@@ -159,7 +159,7 @@ Or run the CLI on an idle pipeline GPU:
   --output outputs/example_en
 ```
 
-See [usage options](docs/installation.md#usage-options) for duration modes, uploads, public access, and resuming jobs.
+See [usage options](docs/installation.md#usage-options) for uploads, public access, and resuming jobs.
 
 ## Results and development
 
@@ -178,7 +178,7 @@ stages/
   separation/            Dialogue/background separation
   speech/                Translation and voice synthesis
   lipsync/               Crop planning and LightX2V requests
-  postprocess/           Mix, composite, retime, export
+  postprocess/           Mix, composite, export
 web/                     Uploads, job queue, result viewer
 scripts/                 Installation, downloads, service launchers
 ```

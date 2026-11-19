@@ -41,9 +41,9 @@ def report(run):
                      "reason": "" if translated else rejected.get(row["id"], row.get("reason", "not_accepted"))})
         if row.get("source_parts"):
             rows[-1]["source_utterance_ids"] = [part["id"] for part in row["source_parts"]]
-        if row.get("time_compression_policy") == "uncapped":
-            rows[-1].update(max_tempo=None, time_compression=row["time_compression"],
-                            translation_review="disabled")
+        for key in ("max_tempo", "time_compression", "translation_review"):
+            if key in row:
+                rows[-1][key] = row[key]
     (run / "source.txt").write_text("\n".join(f"{row['id']}: {row['source_text']}" for row in rows) + "\n")
     (run / "translated.txt").write_text("\n".join(
         f"{row['id']}: {row['target_text'] if row['audio'] == 'translated' else '[original audio preserved]'}"
@@ -62,21 +62,12 @@ def report(run):
               "audio_policy": mix["metadata"].get("source_background_method", "external_target_audio"),
               "limitations": ["Speech recognition, translation and separation are model estimates.",
                               "Non-speech mixed with dialogue may be affected by separation errors."]}
+    if "timing_fit" in dialogue:
+        result["timing_fit"] = dialogue["timing_fit"]
     if "timings" in dialogue:
         result["speech_timings"] = dialogue["timings"]
-    if result["duration_mode"] == "adaptive_video":
-        adaptation = read(run / "adaptive_duration.json")
-        result["output_duration"] = adaptation["duration"]
-        contractions = adaptation.get("contractions", [])
-        result["duration_adaptation"] = {"extensions": adaptation["extensions"],
-                                         "contractions": contractions, "skipped": adaptation["skipped"],
-                                         "vfi_backend": adaptation.get("vfi_backend"),
-                                         "seconds_added": sum(item["extra_frames"] for item in adaptation["extensions"]) / adaptation["fps"],
-                                         "seconds_removed": -sum(item["extra_frames"] for item in contractions) / adaptation["fps"]}
-        if adaptation["extensions"] or contractions:
-            result["limitations"].append("Retimed speech segments also retime their background audio and visual motion; music tempo and motion may change.")
     result["content_verification"] = "disabled"
-    result["limitations"].append("ASR content and final-audio language verification were not performed; fitting speech to its time window and accepted audio IDs do not verify spoken content.")
+    result["limitations"].append("The report records translation and timing checks. It does not independently transcribe the generated soundtrack.")
     edited = result["lip_edited"] + result["partial_lip_edited"]
     if not result["translated"]:
         result["video_mode"] = "preserve_original"

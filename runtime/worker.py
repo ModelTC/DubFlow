@@ -46,7 +46,7 @@ def run(config_path, gpu):
                     arguments = SimpleNamespace(source=request["source"], output=str(output), config=str(config_path),
                         source_filename=request.get("source_filename"),
                         gpu=gpu, source_language=request["source_language"], target_language=request["target_language"],
-                        duration_mode=request.get("duration_mode", "fixed"), resume=request["resume"], analysis_plan=None,
+                        resume=request["resume"], analysis_plan=None,
                         source_audio_manifest=None, dialogue=None, merge_speaker_turns=None)
                     run_pipeline(arguments, execute=pool.execute)
                     (output / "resident_models.json").write_text(json.dumps(

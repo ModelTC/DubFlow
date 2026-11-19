@@ -656,58 +656,6 @@ h1 span {
   cursor: pointer;
   font-size: 12px;
 }
-.duration-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  color: #627660;
-  font-size: 12px;
-  cursor: pointer;
-}
-.duration-toggle small {
-  margin-left: 6px;
-  color: #9da995;
-  font-size: 8px;
-  letter-spacing: 1.3px;
-}
-.duration-toggle input {
-  appearance: none;
-  flex: 0 0 auto;
-  width: 40px;
-  height: 23px;
-  border: 1px solid #cbd6c8;
-  border-radius: 12px;
-  background: #d9e0d5;
-  cursor: pointer;
-  transition: background .18s ease;
-}
-.duration-toggle input::before {
-  content: "";
-  display: block;
-  width: 17px;
-  height: 17px;
-  margin: 2px;
-  border-radius: 50%;
-  background: white;
-  box-shadow: 0 1px 3px #24392c33;
-  transition: transform .18s ease;
-}
-.duration-toggle input:checked {
-  background: var(--green);
-  border-color: var(--green);
-}
-.duration-toggle input:checked::before {
-  transform: translateX(17px);
-}
-.duration-toggle input:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 3px;
-}
-.duration-toggle input:disabled {
-  opacity: .55;
-  cursor: not-allowed;
-}
 .profile-models {
   display: flex;
   flex-wrap: wrap;

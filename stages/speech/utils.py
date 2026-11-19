@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
 from runtime.utils import write_json
 
@@ -22,11 +23,14 @@ def record_timing(output, operation, seconds, utterances):
 
 def summarize_timings(output):
     rounds = []
-    for directory in [output, *sorted(output.glob("shortening_round_*"))]:
-        number = 0 if directory == output else int(directory.name.rsplit("_", 1)[1])
+    directories = [(output, {"round": 0})]
+    directories.extend((directory, {"round": int(directory.name.rsplit("_", 1)[1])})
+                       for directory in sorted(output.glob("shortening_round_*")))
+    directories.append((output / "short_utterance_resample", {"phase": "short_utterance_resample"}))
+    for directory, identity in directories:
         path = directory / "timings.json"
         if path.exists():
-            rounds.append({"round": number, **json.loads(path.read_text())})
+            rounds.append({**identity, **json.loads(path.read_text())})
     if not rounds:
         return None
     result = {"measurement": "client_wall_time", "rounds": rounds,
@@ -41,6 +45,21 @@ def summarize_timings(output):
         result["tts_requested_utterances"] += tts.get("utterances", 0)
         result["tts_cache_hits"] += row.get("tts_cache", {}).get("utterances", 0)
     return result
+
+
+def write_voice_reference(path, waveform, rate):
+    """Preserve the WAV byte hash when only its container metadata would change."""
+    if path.is_file():
+        try:
+            existing, existing_rate = sf.read(path, dtype="float32")
+        except RuntimeError:
+            pass  # An incomplete reference from an interrupted run can be rebuilt.
+        else:
+            if existing_rate == rate and np.array_equal(existing, waveform):
+                return
+    temporary = path.with_suffix(".tmp.wav")
+    sf.write(temporary, waveform, rate, subtype="FLOAT")
+    temporary.replace(path)
 
 
 def audio_signature(path):

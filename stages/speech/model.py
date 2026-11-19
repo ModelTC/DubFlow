@@ -14,68 +14,83 @@ from runtime.execution import call_function
 from runtime.languages import LANGUAGES
 from runtime.models import get
 from runtime.utils import file_signature as signature
+from stages.speech.timing import CJK, available_seconds, text_units, unit_budget
 
 QWEN_TTS_FILES = ["config.json", "model.safetensors", "speech_tokenizer/config.json",
                   "speech_tokenizer/model.safetensors"]
 
 
-def translation_prompt(record, conversation, source_language, target_language, shorten=False):
-    seconds = record.get("available_seconds", record["window_end"] - max(record["window_start"], record["start"]))
+REVIEW_SYSTEM = (
+    "Check source-line facts in a video dub. Output one line only: PASS or "
+    "FAIL: <one specific factual mismatch and a correction, under 25 words>. Do not analyze out loud."
+)
+
+
+def dialogue_context(record, conversation):
     position = next((index for index, item in enumerate(conversation)
-                     if item["id"] == record.get("id")), len(conversation))
-    neighbors = conversation[max(0, position - 2):position + 3]
+                     if item["id"] == record["id"]), len(conversation))
+    neighbors = conversation[max(0, position - 8):position + 9]
     previous = next((item for item in reversed(conversation[:position])
-                     if record.get("speaker_id") is not None and item["speaker_id"] == record["speaker_id"]), None)
+                     if item["speaker_id"] == record["speaker_id"]), None)
     if previous is not None and previous not in neighbors:
         neighbors = [previous, *neighbors]
-    context = "\n".join(f"{item['id']} ({item['speaker_id']}): {item['text']}"
-                        + (f" [Existing translation: {item['target_text']}]" if item.get("target_text") else "")
-                        for item in neighbors if item["id"] != record.get("id"))
-    continuity = (
-        f"[Background Information]\n{context}\n\n"
-        "Keep each speaker's tone, level of formality, forms of address and relationship consistent across turns. "
-        "Use that speaker's previous dialogue and the source context; do not invent a relationship or copy "
-        "another speaker's register. Shortening must not change these choices just to meet the time budget. "
-        "Do not borrow another speaker's words or any other line from the background, even from the same speaker.\n"
+    return "\n".join(f"{item['id']} ({item['speaker_id']}): {item['text'][:160]}"
+                     for item in neighbors if item["id"] != record["id"])
+
+
+def translation_prompt(record, conversation, source_language, target_language, shorten=False):
+    seconds = available_seconds(record)
+    budget = record.get("shortening_word_budget", unit_budget(seconds, target_language))
+    unit = "spoken characters" if target_language in CJK else "spoken words"
+    context = dialogue_context(record, conversation)
+    source = f"\n[Context, do not translate]\n{context}\n\n[Source line]\n{record['text']}"
+    instructions = (
+        f"Translate the source line from {LANGUAGES[source_language]} into idiomatic, spoken "
+        f"{LANGUAGES[target_language]} for a video dub. Return only the spoken translation.\n"
+        "Keep the speaker's tone and every essential fact, named entity, number, negation, and question. "
+        "Use the conversation to resolve ambiguous words, names, and what pronouns refer to. "
+        "Render the meaning in the most concise natural wording. Remove filler and literal phrasing "
+        "where the meaning and speaking intent stay intact. Never borrow words from neighboring speakers. "
+        "Keep deliberate repetitions that matter for the delivery. Spell numbers as they are spoken.\n"
+        f"The available time is {seconds:.2f} seconds. Aim for at most about {budget} {unit} "
+        "at natural speed. A brief standalone reaction can use its shortest idiomatic equivalent. "
+        "Keep the meaning if this estimate is too tight.\n"
     )
     if shorten:
-        prompt = continuity + (
-            f"Translate ONLY the {LANGUAGES[source_language]} source into natural spoken {LANGUAGES[target_language]} "
-            "for a video dubbing slot. Adjust the wording without summarizing or dropping any clause. "
-            "Preserve every statement, question, negation, name, number and essential fact. "
-            "Return ONLY the dialogue without explanations.\n"
-            f"The available speaking time is {seconds:.2f} seconds.\n"
-            f"Aim for about {max(.01, seconds * .9):.2f} to {seconds:.2f} seconds of speech, "
-            "not a much shorter line. If preserving every clause needs more time, keep the meaning; "
-            "the audio can be sped up later.\n"
-            f"Previous translation: {record['target_text']}\n"
-            f"Previous natural audio: {record['tts_natural_duration']:.2f} seconds; "
-            f"after native speed control: {record['tts_duration']:.2f} seconds.\n"
+        previous = record["target_text"]
+        previous_units = text_units(previous, target_language)
+        instructions += (
+            f"The previous version took {record['tts_duration']:.2f} seconds "
+            f"and contains {previous_units} {unit}: {previous}\n"
+            f"Rewrite it with different wording, aiming for {budget} {unit}. "
+            "Favor direct everyday phrasing, short expressions of negation and implied words "
+            "where clear. Keep the same meaning and use delivery rather than extra words for emphasis. "
+            "Repeating the previous wording cannot fit the time budget.\n"
         )
-        if record["tts_duration"] < .9 * seconds:
-            prompt += "The previous dub was too short. Restore omitted clauses and detail; use longer natural wording.\n"
-        else:
-            prompt += "The previous dub was too long. Tighten wording while retaining every clause.\n"
-        if target_language not in ("zh", "ja", "ko"):
-            count = record["shortening_word_budget"]
-            unit = "word" if count == 1 else "words"
-            prompt += f"Aim for about {count} {LANGUAGES[target_language]} {unit}; do not cut meaning to hit this estimate.\n"
-        else:
-            prompt += (f"Aim for about {record['shortening_word_budget']} {LANGUAGES[target_language]} "
-                       "characters; do not cut meaning to hit this estimate.\n")
-        return prompt + f"\n[Source Text]\n{record['text']}"
-    prompt = continuity + (
-        f"Please translate the following text from {LANGUAGES[source_language]} into {LANGUAGES[target_language]}, "
-        "taking the provided background information into consideration. "
-        "Return ONLY the translated spoken words, without explanations or labels. "
-        "Translate every clause, including introductory phrases and quotation cues; do not omit or summarize. "
-        "Preserve negation, numbers, names, pronouns and every essential fact. "
-        "A source fragment must remain a fragment. Keep conditional clauses conditional; "
-        "do not add a question or conclusion from a neighboring line. "
-        "Use natural spoken dialogue and spell numbers as spoken words, not digits. "
-        "Do not shorten for timing in this first translation; audio timing is handled separately.\n"
+    if record.get("try_different_wording"):
+        instructions += (
+            "Your last attempt repeated the version that ran too long. "
+            "Use a different grammatical construction to express the same idea in fewer spoken words.\n"
+        )
+    if record.get("rejected_translation"):
+        instructions += (
+            f"Rejected translation: {record['rejected_translation']}\n"
+            f"Review feedback: {record['review_feedback']}\n"
+            "Correct the flagged mismatch using the source and context. Preserve every essential fact.\n"
+        )
+    return instructions + source
+
+
+def semantic_review_prompt(record, target, source_language, target_language):
+    return (
+        f"Original ({LANGUAGES[source_language]}): {record['text']}\n"
+        f"Previous dub ({LANGUAGES[target_language]}): {record['target_text']}\n"
+        f"Shorter dub for review ({LANGUAGES[target_language]}): {target}\n"
+        "Judge whether the shorter dub preserves the original line's facts and intent. "
+        "Natural grammar, brief idiomatic reactions, and omitted filler are allowed. "
+        "Do not invent facts or reject a stylistic change. If there is no clear error, answer PASS. "
+        "Otherwise answer FAIL: followed by the concrete change and a short correction."
     )
-    return prompt + f"\n[Source Text]\n{record['text']}"
 
 
 def validate_qwen_assets(model_dir):

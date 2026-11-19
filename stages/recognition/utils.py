@@ -11,7 +11,7 @@ from pathlib import Path
 from runtime.languages import LANGUAGES
 
 SAMPLE_RATE = 16000
-ASR_POLICY = "full_audio_qwen_alignment_v9"
+ASR_POLICY = "full_audio_qwen_alignment_v10"
 WINDOW_SECONDS = 25
 OVERLAP_SECONDS = 2
 
@@ -117,7 +117,12 @@ def sentence_segments(words, transcript):
     anchored = anchored_words(words, transcript)
     groups = []
     for word in anchored:
-        if not groups or groups[-1]["closed"] or word["start"] - groups[-1]["words"][-1]["end"] > .7:
+        previous = groups[-1]["words"][-1] if groups else None
+        repair = word.get("alignment_repair")
+        same_repair = previous is not None and repair is not None and repair == previous.get("alignment_repair")
+        repeated = same_repair and word["word"].strip().casefold() == previous["word"].strip().casefold()
+        if (previous is None or (groups[-1]["closed"] and not repeated) or
+                (word["start"] - previous["end"] > .7 and not same_repair)):
             groups.append({"words": [], "closed": False})
         groups[-1]["words"].append(word)
         groups[-1]["closed"] = bool(re.search(r"[。！？.!?][\"'”’）)]*\s*$", word["word"]))
@@ -234,6 +239,10 @@ def label_words(asr, diarization):
                         scores[speaker] = scores.get(speaker, 0.0) + overlap
                         totals[speaker] = totals.get(speaker, 0.0) + overlap
                         active.append((start, end, speaker))
+            hint = word.get("alignment_speaker_hint")
+            if not scores and hint is not None:
+                scores[hint] = 0.0
+                word["speaker_assignment"] = "recovered_turn_boundary"
             simultaneous = any(left[2] != right[2] and max(left[0], right[0]) < min(left[1], right[1])
                                for index, left in enumerate(active) for right in active[index + 1:])
             candidates.append((word, scores, simultaneous))
